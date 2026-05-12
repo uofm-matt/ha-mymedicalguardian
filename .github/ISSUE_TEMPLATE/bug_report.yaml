@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a problem with the MyMedicalGuardian Tracker integration.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚠ Before you post — sanitise PII
+
+        This integration tracks a real person's location. Anything you attach
+        here is **public**. Please redact:
+
+        - **Diagnostics download**: the built-in redaction only covers email,
+          password, address, latitude, longitude. It does NOT redact
+          `battery_percent`, `steps_today`, `device_model`, or any of the
+          `observed_at` / `observed_raw` timestamps — those describe the
+          wearer's behaviour over time. Strip or stub anything you wouldn't
+          want strangers correlating.
+        - **Logs**: filter `home-assistant.log` for `mymedicalguardian` only,
+          and grep out any reference to your account email, MAC addresses
+          captured during cradle events, or specific addresses.
+        - **Screenshots**: blur entity names if they identify the wearer.
+
+        If in doubt, paraphrase rather than paste.
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "e.g. 2026.5.1"
+    validations:
+      required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: From Settings → Devices & Services → MyMedicalGuardian Tracker → ⋮ → Info
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: device_model
+    attributes:
+      label: MG device model
+      description: From Diagnostics → snapshot.device_model
+      placeholder: "e.g. MGMini-Pearl VZ"
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: Describe the symptom. Paraphrase rather than paste raw data.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitised log excerpt
+      description: Relevant lines from Settings → System → Logs filtered for `mymedicalguardian`. **Redact PII first.**
+      render: text
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitised diagnostics (optional)
+      description: Settings → Devices & Services → ⋮ → Download diagnostics. **Strip or paraphrase fields beyond the built-in redactions before posting.**
+      render: json

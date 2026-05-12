@@ -1,0 +1,16 @@
+{
+  "entity": {
+    "device_tracker": {
+      "location": {"default": "mdi:medical-bag"}
+    },
+    "sensor": {
+      "event": {"default": "mdi:heart-pulse"},
+      "last_seen": {"default": "mdi:clock-outline"},
+      "signal": {"default": "mdi:signal"},
+      "steps_today": {"default": "mdi:shoe-print"}
+    },
+    "event": {
+      "alert": {"default": "mdi:bell-alert"}
+    }
+  }
+}

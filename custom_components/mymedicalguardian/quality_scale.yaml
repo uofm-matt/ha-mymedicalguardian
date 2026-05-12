@@ -1,0 +1,138 @@
+rules:
+  # ───────────────────────── Bronze ─────────────────────────
+  action-setup:
+    status: exempt
+    comment: No custom services exposed.
+  appropriate-polling:
+    status: done
+    comment: 10-min default; configurable 5–120 min via options flow. Matches the portal's hourly cadence.
+  brands:
+    status: done
+    comment: Brand images (icon + logo, @1x + @2x) ship inside the integration at custom_components/mymedicalguardian/brand/. Per the HA 2026.3 brands-proxy-api announcement, custom integrations supply their own assets locally; the home-assistant/brands repo no longer accepts custom-integration PRs.
+  common-modules:
+    status: done
+    comment: Shared device_info() helper in entity.py.
+  config-flow:
+    status: done
+  config-flow-test-coverage:
+    status: done
+    comment: tests/test_config_flow.py covers user happy/sad/duplicate, reauth happy/sad, reconfigure happy/mismatch, options flow.
+  dependency-transparency:
+    status: done
+    comment: httpx>=0.27 in manifest requirements.
+  docs-actions:
+    status: exempt
+    comment: No custom services exposed.
+  docs-high-level-description:
+    status: done
+  docs-installation-instructions:
+    status: done
+  docs-removal-instructions:
+    status: done
+  docs-supported-functions:
+    status: done
+  entity-event-setup:
+    status: done
+    comment: event.MGAlertEvent triggers on coordinator updates; no internal pub/sub.
+  entity-unique-id:
+    status: done
+  has-entity-name:
+    status: done
+  runtime-data:
+    status: done
+    comment: ConfigEntry[MGCoordinator] runtime_data; no hass.data.
+  test-before-configure:
+    status: done
+    comment: Config flow validates by calling fetch_snapshot before creating the entry.
+  test-before-setup:
+    status: done
+    comment: async_config_entry_first_refresh() in async_setup_entry.
+  unique-config-entry:
+    status: done
+    comment: unique_id is the lowercased email.
+
+  # ───────────────────────── Silver ─────────────────────────
+  entity-unavailable:
+    status: done
+    comment: CoordinatorEntity automatically reports unavailable when the coordinator's last update failed.
+  integration-owner:
+    status: done
+    comment: codeowners in manifest.
+  log-when-unavailable:
+    status: done
+    comment: DataUpdateCoordinator logs on transition to/from unavailable. FetchError detail goes to debug log.
+  parallel-updates:
+    status: done
+    comment: PARALLEL_UPDATES = 0 declared on every platform; entities don't poll, the coordinator does.
+  reauthentication-flow:
+    status: done
+    comment: AuthError raises ConfigEntryAuthFailed → async_step_reauth + reauth_confirm in config_flow.
+  test-coverage:
+    status: done
+    comment: 29 tests cover parsers, config flow, coordinator repair lifecycle, init setup/unload, and diagnostics. Overall 88% line coverage.
+
+  # ───────────────────────── Gold ─────────────────────────
+  devices:
+    status: done
+    comment: One device per config entry, populated with model from the portal (e.g. "MGMini-Pearl VZ").
+  diagnostics:
+    status: done
+    comment: diagnostics.py emits redacted Snapshot for support.
+  discovery:
+    status: exempt
+    comment: Cloud-polling integration with credentials; no discovery surface.
+  docs-data-update:
+    status: done
+    comment: README "How fresh is the data?" section explains poll cadence + observed lag distribution.
+  docs-examples:
+    status: done
+    comment: README "Use cases & example automations" section with YAML.
+  docs-known-limitations:
+    status: done
+  docs-supported-devices:
+    status: done
+  docs-troubleshooting:
+    status: done
+    comment: README "Troubleshooting & filing issues" section; Repair UI surfaces the major failure mode.
+  docs-use-cases:
+    status: done
+  dynamic-devices:
+    status: exempt
+    comment: One device per credentials. Multi-care-recipient is logged as a warning today, full support deferred.
+  entity-category:
+    status: done
+    comment: Signal sensor flagged DIAGNOSTIC; others default to primary.
+  entity-device-class:
+    status: done
+    comment: BATTERY, CONNECTIVITY, BATTERY_CHARGING, TIMESTAMP applied where applicable.
+  entity-disabled-by-default:
+    status: exempt
+    comment: All entities are useful; none warrant being hidden behind an opt-in.
+  entity-translations:
+    status: done
+  exception-translations:
+    status: done
+    comment: UpdateFailed/ConfigEntryAuthFailed use translation_domain + translation_key.
+  icon-translations:
+    status: done
+    comment: icons.json maps translation_key → mdi icon.
+  reconfiguration-flow:
+    status: done
+    comment: async_step_reconfigure lets users update name/email/password without removing.
+  repair-issues:
+    status: done
+    comment: portal_unreachable issue raised after 24h of consecutive fetch failures; auto-resolves on success.
+  stale-devices:
+    status: exempt
+    comment: One device per entry, lifetime tied to the entry. No upstream "device removed" signal exists; account deletion removes the entry.
+
+  # ───────────────────────── Platinum ─────────────────────────
+  async-dependency:
+    status: done
+    comment: httpx is fully async.
+  inject-websession:
+    status: exempt
+    comment: Login flow is cookie-stateful and depends on follow_redirects=True; the shared client does not guarantee either. Coordinator owns its own httpx.AsyncClient, closed in async_shutdown.
+  strict-typing:
+    status: done
+    comment: pyproject.toml mirrors home-assistant/core mypy config — all strict checks ON except no_implicit_reexport (HA's own modules use implicit re-exports). Zero errors on `mypy custom_components/mymedicalguardian/`.

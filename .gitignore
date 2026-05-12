@@ -1,0 +1,20 @@
+# local development / test instance
+config.toml
+data/
+debug/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv-*/
+.coverage
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+uv.lock

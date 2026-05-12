@@ -1,0 +1,86 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MyMedicalGuardian login",
+        "description": "Enter your MyGuardian caregiver-portal credentials. The name is used as the device title and prefixes every entity (e.g. \"Mom Location\", \"Mom Battery\") — pick whatever reads well in your dashboard.",
+        "data": {
+          "name": "Name (e.g. \"Mom\", \"Dad\")",
+          "email": "Email / username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "MyMedicalGuardian password expired",
+        "description": "Enter the current password for {email}.",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "MyMedicalGuardian reconfigure",
+        "description": "Update the credentials or display name for {current_email}. Changing the email moves the integration to a different MyGuardian account.",
+        "data": {
+          "name": "Name",
+          "email": "Email / username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Login was rejected. Check the email and password.",
+      "cannot_connect": "Could not reach mymedicalguardian.com or parse the response.",
+      "unknown": "Unexpected error — see the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "This MyMedicalGuardian account is already configured.",
+      "reauth_successful": "Re-authentication successful.",
+      "reconfigure_successful": "Configuration updated.",
+      "unique_id_mismatch": "Email cannot be changed to a different account. Delete the integration and add the new one instead."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MyMedicalGuardian polling",
+        "description": "How often to poll the portal (minutes). MG updates roughly hourly; 10 min is a sensible default.",
+        "data": {
+          "scan_interval_min": "Scan interval (minutes)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "device_tracker": {
+      "location": {"name": "Location"}
+    },
+    "sensor": {
+      "event": {"name": "Event"},
+      "last_seen": {"name": "Last seen"},
+      "battery": {"name": "Battery"},
+      "signal": {"name": "Signal"},
+      "steps_today": {"name": "Steps today"}
+    },
+    "binary_sensor": {
+      "online": {"name": "Online"},
+      "charging": {"name": "Charging"}
+    },
+    "event": {
+      "alert": {"name": "Alert"}
+    }
+  },
+  "exceptions": {
+    "fetch_failed": {
+      "message": "Could not fetch latest data from MyGuardian portal: {reason}"
+    },
+    "auth_failed": {
+      "message": "MyGuardian login rejected — credentials are no longer valid."
+    }
+  },
+  "issues": {
+    "portal_unreachable": {
+      "title": "MyGuardian portal unreachable",
+      "description": "The MyMedicalGuardian Tracker integration could not reach the caregiver portal for over 24 hours (last error: {reason}). Verify that mymedicalguardian.com is up, that your home network has internet, and that your MyGuardian account is still active. If the portal works in a browser but this integration can't fetch, please [open an issue]({issue_url}) and attach the diagnostics download."
+    }
+  }
+}

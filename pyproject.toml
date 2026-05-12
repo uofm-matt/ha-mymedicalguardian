@@ -1,0 +1,52 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--cov=custom_components.mymedicalguardian --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["custom_components/mymedicalguardian"]
+omit = ["custom_components/mymedicalguardian/__pycache__/*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplify
+    "PIE",  # misc
+    "C4",   # comprehensions
+    "RET",  # return
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line length handled by formatter
+]
+
+# Mypy config mirrors home-assistant/core: all the strict checks ON except
+# `no_implicit_reexport`, because HA's own modules re-export names without
+# the `as` alias mypy strict mode demands.
+[tool.mypy]
+python_version = "3.12"
+show_error_codes = true
+follow_imports = "silent"
+local_partial_types = true
+strict_equality = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+disable_error_code = ["import-untyped"]
