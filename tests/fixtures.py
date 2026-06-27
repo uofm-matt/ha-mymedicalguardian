@@ -244,3 +244,34 @@ DASHBOARD_JSON_ALERT_BAD_TIMESTAMP = {
         "html_step_counting": "",
     }
 }
+
+# Present-but-null html fields (not absent) must not crash the regex .search().
+DASHBOARD_JSON_FIELDS_NULL = {
+    "data": {"html_device_status": None, "html_step_counting": None}
+}
+
+# A Fall whose latitude is a JSON Infinity literal must keep the alert with the
+# non-finite coordinate nulled.
+DASHBOARD_JSON_ALERT_INF_COORD = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"latitude":Infinity,"longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A decimal-string totalSteps and a non-finite totalMiles: steps parse, miles
+# drop, calories survive — one bad sub-field must not discard the others.
+DASHBOARD_JSON_STEPS_MIXED = {
+    "data": {
+        "html_device_status": "",
+        "html_step_counting": (
+            "let todaysSteps = JSON.parse('"
+            r"{\"totalSteps\":\"1929.0\",\"totalMiles\":Infinity,\"totalCalories\":0.41}"
+            "');"
+        ),
+    }
+}

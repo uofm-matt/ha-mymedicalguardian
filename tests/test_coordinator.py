@@ -82,6 +82,26 @@ class TestRepairIssueLifecycle:
         registry = ir.async_get(hass)
         assert registry.async_get_issue(DOMAIN, ISSUE_PORTAL_UNREACHABLE) is None
 
+    async def test_first_failure_persists_across_coordinator_recreation(self, hass):
+        # ConfigEntryNotReady retries recreate the coordinator; the first-failure
+        # time must survive so the 24h repair issue can eventually fire.
+        entry = MockConfigEntry(
+            domain=DOMAIN, unique_id="test@example.com", data=ENTRY_DATA
+        )
+        entry.add_to_hass(hass)
+        coord1 = MGCoordinator(hass, entry)
+        with patch(
+            "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+            AsyncMock(side_effect=FetchError("down")),
+        ):
+            await coord1.async_refresh()
+        first = coord1._first_failure_at
+        assert first is not None
+
+        # A fresh coordinator for the same entry sees the persisted timestamp.
+        coord2 = MGCoordinator(hass, entry)
+        assert coord2._first_failure_at == first
+
     async def test_auth_error_also_clears_portal_issue(self, hass):
         """AuthError proves the portal IS reachable, so any pending
         portal-unreachable issue should clear."""

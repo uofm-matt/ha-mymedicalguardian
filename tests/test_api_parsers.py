@@ -1,8 +1,11 @@
 """Pure-function tests for api.py parsers."""
 
+from datetime import UTC, datetime, timedelta, timezone
+
 import pytest
 
 from custom_components.mymedicalguardian.api import (
+    Alert,
     FetchError,
     _parse_dashboard,
     _parse_locations,
@@ -12,6 +15,7 @@ from custom_components.mymedicalguardian.api import (
 from .fixtures import (
     DASHBOARD_JSON_ALERT_BAD_LATLON,
     DASHBOARD_JSON_ALERT_BAD_TIMESTAMP,
+    DASHBOARD_JSON_ALERT_INF_COORD,
     DASHBOARD_JSON_ALERT_MILLIS_UTC,
     DASHBOARD_JSON_ALERT_NO_USER_TZ,
     DASHBOARD_JSON_BATTERY_FLOAT_STRING,
@@ -19,14 +23,33 @@ from .fixtures import (
     DASHBOARD_JSON_BATTERY_OUT_OF_RANGE,
     DASHBOARD_JSON_CRITICAL_MASKED,
     DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM,
+    DASHBOARD_JSON_FIELDS_NULL,
     DASHBOARD_JSON_FULL,
     DASHBOARD_JSON_NO_CRADLE,
     DASHBOARD_JSON_OFF_CRADLE,
     DASHBOARD_JSON_SAME_MINUTE_ALERTS,
+    DASHBOARD_JSON_STEPS_MIXED,
     DASHBOARD_JSON_STEPS_NONDICT,
     HISTORY_PAGE_HTML,
     HISTORY_PAGE_HTML_BAD_ROW,
 )
+
+
+class TestAlertDedup:
+    def test_dedup_key_instant_based_across_tz_representation(self):
+        # The same instant carried as UTC (+00:00) vs offset-aware local (-04:00)
+        # must produce identical dedup keys, so the alert doesn't re-fire when the
+        # portal's source field flips across polls or a restart.
+        as_utc = Alert(
+            type="Fall", observed_at=datetime(2026, 5, 12, 14, 44, 30, tzinfo=UTC)
+        )
+        as_local = Alert(
+            type="Fall",
+            observed_at=datetime(
+                2026, 5, 12, 10, 44, 30, tzinfo=timezone(timedelta(hours=-4))
+            ),
+        )
+        assert as_utc.dedup_key == as_local.dedup_key
 
 
 class TestParseWhen:
@@ -181,6 +204,27 @@ class TestParseDashboard:
         # An out-of-range time_user_tz with no time_utc drops just that alert.
         fields = _parse_dashboard(DASHBOARD_JSON_ALERT_BAD_TIMESTAMP, device_model=None)
         assert "latest_alert" not in fields
+
+    def test_present_but_null_html_fields_do_not_crash(self):
+        # html_device_status/html_step_counting present with JSON null must not
+        # blow up re.search(None).
+        assert _parse_dashboard(DASHBOARD_JSON_FIELDS_NULL, device_model="X") == {
+            "device_model": "X"
+        }
+
+    def test_non_finite_coordinate_nulled_keeps_alert(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_ALERT_INF_COORD, device_model=None)
+        alert = fields["latest_alert"]
+        assert alert.type == "Fall"
+        assert alert.latitude is None  # Infinity rejected
+        assert alert.longitude == -84.0
+
+    def test_steps_subfields_independent(self):
+        # Decimal-string steps parse; non-finite miles drop; calories survive.
+        fields = _parse_dashboard(DASHBOARD_JSON_STEPS_MIXED, device_model=None)
+        assert fields["steps_today"] == 1929
+        assert "miles_today" not in fields
+        assert fields["calories_today"] == pytest.approx(0.41)
 
     def test_alert_built_from_time_utc_when_user_tz_missing(self):
         fields = _parse_dashboard(DASHBOARD_JSON_ALERT_NO_USER_TZ, device_model=None)

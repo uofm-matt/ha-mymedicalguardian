@@ -59,7 +59,12 @@ class MGOnlineSensor(_Base):
         loc = self.coordinator.data.latest_location if self.coordinator.data else None
         if not loc:
             return None
-        return (utcnow() - loc.observed_at) < STALE_AFTER
+        # Data is refreshed only at the poll cadence and is legitimately up to one
+        # interval old, so widen the staleness window past the configured interval
+        # (up to 120 min) — otherwise a healthy device flaps to "disconnected".
+        interval = self.coordinator.update_interval or timedelta()
+        window = max(STALE_AFTER, interval + timedelta(minutes=30))
+        return (utcnow() - loc.observed_at) < window
 
 
 class MGChargingSensor(_Base):

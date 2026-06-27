@@ -69,7 +69,7 @@ rules:
     comment: AuthError raises ConfigEntryAuthFailed → async_step_reauth + reauth_confirm in config_flow.
   test-coverage:
     status: done
-    comment: 63 tests cover parsers, config flow, coordinator repair lifecycle, init setup/unload, event restore/recency, and diagnostics. Overall 95% line coverage.
+    comment: 70 tests cover parsers, config flow, coordinator repair lifecycle, init setup/unload, event restore/recency, binary-sensor staleness, and diagnostics. Overall 96% line coverage.
 
   # ───────────────────────── Gold ─────────────────────────
   devices:

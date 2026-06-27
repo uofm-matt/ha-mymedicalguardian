@@ -100,7 +100,9 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
                     "latitude": alert.latitude,
                     "longitude": alert.longitude,
                 },
-                "observed_at": alert.observed_at.isoformat(),
+                # Persist the same normalized value dedup_key uses, so the marker
+                # restored from this attribute on restart compares identically.
+                "observed_at": alert.dedup_key[1],
             },
         )
         self.async_write_ha_state()

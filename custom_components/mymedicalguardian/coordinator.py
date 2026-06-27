@@ -20,6 +20,11 @@ _LOGGER = logging.getLogger(__name__)
 ISSUE_PORTAL_UNREACHABLE = "portal_unreachable"
 PORTAL_UNREACHABLE_AFTER = timedelta(hours=24)
 ISSUE_URL = "https://github.com/uofm-matt/ha-mymedicalguardian/issues"
+# Keyed by entry_id in hass.data so the first-failure timestamp survives the
+# coordinator being recreated on every ConfigEntryNotReady setup retry —
+# otherwise the 24h repair issue could never fire when the portal is down at
+# initial setup.
+_FAILURE_STORE = f"{DOMAIN}_first_failures"
 
 
 class MGCoordinator(DataUpdateCoordinator[Snapshot]):
@@ -43,7 +48,20 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         self._email: str = entry.data[CONF_EMAIL]
         self._password: str = entry.data[CONF_PASSWORD]
         self._client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-        self._first_failure_at: datetime | None = None
+        self._entry_id = entry.entry_id
+
+    @property
+    def _first_failure_at(self) -> datetime | None:
+        store: dict[str, datetime] = self.hass.data.get(_FAILURE_STORE, {})
+        return store.get(self._entry_id)
+
+    @_first_failure_at.setter
+    def _first_failure_at(self, value: datetime | None) -> None:
+        store: dict[str, datetime] = self.hass.data.setdefault(_FAILURE_STORE, {})
+        if value is None:
+            store.pop(self._entry_id, None)
+        else:
+            store[self._entry_id] = value
 
     async def _async_update_data(self) -> Snapshot:
         # Login produces a session cookie; clear stale cookies before each

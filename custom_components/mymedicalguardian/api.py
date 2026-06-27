@@ -10,6 +10,7 @@ inside HTML fragments; we extract those by regex rather than executing JS.
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
@@ -92,10 +93,11 @@ class Alert:
 
     @property
     def dedup_key(self) -> tuple[str, str]:
-        """Stable identity for de-duping. ``observed_at`` carries full-second
-        UTC when the portal supplied ``time_utc``, so two distinct alerts in the
-        same wall-clock minute no longer collapse to one."""
-        return (self.type, self.observed_at.isoformat())
+        """Instant-based identity for de-duping. Normalized to UTC so the SAME
+        alert keys identically whether the portal supplied time_utc (+00:00) or
+        only the offset-aware time_user_tz — otherwise it would re-fire when the
+        source field flips across polls or a restart."""
+        return (self.type, self.observed_at.astimezone(UTC).isoformat())
 
 
 @dataclass(slots=True, frozen=True)
@@ -149,14 +151,15 @@ def _parse_utc(raw: str | None) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _coord(val: Any) -> float | None:
-    """Coerce a portal lat/lon value to float, or None if absent/non-numeric."""
-    if val in (None, ""):
-        return None
+def _finite_float(val: Any) -> float | None:
+    """Coerce a portal value to a finite float, or None if absent / non-numeric /
+    non-finite. json.loads accepts bare Infinity/NaN literals, so the isfinite
+    check is what keeps them out of coords, battery, miles, and calories."""
     try:
-        return float(val)
+        f = float(val)
     except (ValueError, TypeError):
         return None
+    return f if math.isfinite(f) else None
 
 
 def _alert_age_key(ev: dict[str, Any]) -> datetime:
@@ -187,8 +190,8 @@ def _build_alert(ev: dict[str, Any]) -> Alert | None:
         type=ev.get("type", "Unknown"),
         observed_at=observed_at,
         address=ev.get("address"),
-        latitude=_coord(ev.get("latitude")),
-        longitude=_coord(ev.get("longitude")),
+        latitude=_finite_float(ev.get("latitude")),
+        longitude=_finite_float(ev.get("longitude")),
     )
 
 
@@ -223,29 +226,26 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
     if not isinstance(data, dict):
         # A 200 body of {"data": null} reaches here; treat as an empty dashboard.
         data = {}
-    ds = data.get("html_device_status", "")
-    steps_html = data.get("html_step_counting", "")
+    # `or ""` (not a get-default) because a present-but-null field returns None,
+    # and re.search(None) raises TypeError outside the inner guards below.
+    ds = data.get("html_device_status") or ""
+    steps_html = data.get("html_step_counting") or ""
 
     if m := _BATTERY_RE.search(ds):
         try:
             bi = json.loads(m.group(1))
             if isinstance(bi, dict):
-                pct = bi.get("battery_percentage")
-                val: int | None = None
-                if pct is not None and pct != "":
-                    n = int(float(pct))
-                    val = n if 0 <= n <= 100 else None
-                    if val is None:
-                        _LOGGER.debug("battery_percentage out of range: %s", pct)
+                pct = _finite_float(bi.get("battery_percentage"))
+                val = int(pct) if pct is not None and 0 <= pct <= 100 else None
+                if pct is not None and val is None:
+                    _LOGGER.debug("battery_percentage out of range: %s", pct)
                 # Only record the reading's timestamp when the reading itself was
                 # accepted, so a dropped value doesn't leave a dangling observed_at.
                 if val is not None:
                     fields["battery_percent"] = val
                     if t := bi.get("time_user_tz"):
                         fields["battery_observed_at"] = _parse_when(t)
-        except (ValueError, TypeError, OverflowError, FetchError) as err:
-            # OverflowError: json.loads accepts Infinity/NaN, and int(float('inf'))
-            # overflows — drop the field rather than failing the whole poll.
+        except (ValueError, TypeError, FetchError) as err:
             _LOGGER.debug("batteryInfo unparseable: %s", err)
 
     if m := _DEVICE_STATUS_RE.search(ds):
@@ -283,15 +283,18 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
     if m := _STEPS_RE.search(steps_html):
         try:
             steps = json.loads(m.group(1).encode().decode("unicode_escape"))
-            if isinstance(steps, dict):
-                if (s := steps.get("totalSteps")) is not None:
-                    fields["steps_today"] = int(s)
-                if (mi := steps.get("totalMiles")) is not None:
-                    fields["miles_today"] = float(mi)
-                if (cal := steps.get("totalCalories")) is not None:
-                    fields["calories_today"] = float(cal)
-        except (ValueError, TypeError, OverflowError) as err:
+        except (ValueError, TypeError) as err:
             _LOGGER.debug("todaysSteps unparseable: %s", err)
+            steps = None
+        if isinstance(steps, dict):
+            # Parse each field independently so one bad sub-field (a decimal
+            # string, Infinity, NaN) drops only itself, not the whole reading.
+            if (s := _finite_float(steps.get("totalSteps"))) is not None:
+                fields["steps_today"] = int(s)
+            if (mi := _finite_float(steps.get("totalMiles"))) is not None:
+                fields["miles_today"] = mi
+            if (cal := _finite_float(steps.get("totalCalories"))) is not None:
+                fields["calories_today"] = cal
 
     return fields
 
