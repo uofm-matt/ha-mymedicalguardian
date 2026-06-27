@@ -74,24 +74,33 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         # snapshot. Restore the high-water mark from the last event HA persisted
         # before shutdown, then evaluate the initial snapshot once.
         await super().async_added_to_hass()
-        self._added_at = utcnow()
         if (last := await self.async_get_last_event_data()) is not None:
             self._fired_through = _parse_iso(
                 (last.last_event_attributes or {}).get("observed_at")
             )
-        # Upgrade safety: a v1.0.0 marker is minute-resolution. If the live alert
-        # is the same event at finer (second) resolution, raise the mark to it
-        # without firing so the upgrade restart doesn't replay it.
-        alert = self.coordinator.data.latest_alert if self.coordinator.data else None
-        hwm = self._fired_through
-        if (
-            hwm is not None
-            and alert is not None
-            and alert.observed_at > hwm
-            and _same_minute(alert.observed_at, hwm)
-        ):
-            self._fired_through = alert.observed_at
+        self._adopt_minute_resolution_marker()
         self._handle_coordinator_update()
+
+    def _adopt_minute_resolution_marker(self) -> None:
+        # v1.0.0 persisted minute-resolution marks (seconds always 00). If the
+        # restored mark looks minute-resolution, an in-window alert in that same
+        # minute is the same already-fired event at finer (second) resolution:
+        # raise the mark to it WITHOUT firing so the upgrade restart doesn't
+        # replay it. Scanning the whole list (not just the newest) keeps a newer
+        # routine event from hiding the still-in-window fired critical. The
+        # seconds==0 gate avoids swallowing a genuinely-new same-minute alert when
+        # the mark is already a v1.0.1 second-resolution value.
+        hwm = self._fired_through
+        if hwm is None or hwm.second or hwm.microsecond:
+            return
+        alerts = self.coordinator.data.alerts if self.coordinator.data else ()
+        same_minute = [
+            a.observed_at
+            for a in alerts
+            if a.observed_at > hwm and _same_minute(a.observed_at, hwm)
+        ]
+        if same_minute:
+            self._fired_through = max(same_minute)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -107,15 +116,17 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         # moment monitoring began, so a pre-install alert is never fired no matter
         # which poll first surfaces it. A genuine post-startup alert is strictly
         # newer; on a restart the restored mark lets a real HA-downtime alert
-        # through. Among the unfired alerts, surface the newest Fall/SOS first so
-        # a critical event is never delayed by a routine one; the rest fire on the
-        # following polls (each advances the mark).
+        # through. Fire the OLDEST unfired Fall/SOS first so the mark advances
+        # minimally and any newer critical in the same window still fires on the
+        # next poll (never swallowed); with no critical, fire the newest routine.
         baseline = self._fired_through or self._added_at
         fresh = [a for a in alerts if a.observed_at > baseline]
         if not fresh:
             return None
         critical = [a for a in fresh if a.type in _CRITICAL_ALERTS]
-        return (critical or fresh)[0]  # alerts are newest-first
+        if critical:
+            return min(critical, key=lambda a: a.observed_at)
+        return fresh[0]  # alerts are newest-first
 
     def _fire(self, alert: Alert) -> None:
         self._fired_through = alert.observed_at

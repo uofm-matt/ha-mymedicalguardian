@@ -163,6 +163,27 @@ async def test_critical_fires_before_newer_routine(hass):
     assert _event_type(hass) == "Heart Beat"  # routine fires next, not masked
 
 
+async def test_two_criticals_same_window_both_fire(hass):
+    # A Fall and a slightly-newer SOS first surface together: the OLDER critical
+    # fires first (mark advances minimally), the newer fires next poll. Neither
+    # emergency is swallowed.
+    base = utcnow() + timedelta(minutes=5)
+    fall = _alert(base.replace(second=30), "Fall")
+    sos = _alert(base.replace(second=50), "SOS")
+    entry = _entry(hass)
+    fake = AsyncMock(side_effect=[Snapshot(), _snap(sos, fall), _snap(sos, fall)])
+    with patch(FETCH, fake):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert _event_type(hass) == "Fall"  # oldest critical first
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+    assert _event_type(hass) == "SOS"  # newer critical not lost behind the Fall
+
+
 async def test_no_phantom_for_stale_alert_on_later_poll(hass):
     # Fresh install, empty first poll, then a stale (pre-install) Fall surfaces on
     # a later poll: it must NOT fire even though nothing has fired yet.
@@ -291,6 +312,61 @@ async def test_no_refire_on_upgrade_minute_resolution(hass):
 
     state = hass.states.get("event.mom_alert")
     assert state.state == triggered.isoformat(timespec="milliseconds")  # no re-fire
+
+
+async def test_upgrade_no_refire_fall_with_newer_routine_present(hass):
+    # v1.0.0 minute-res marker for an already-fired Fall, plus a NEWER routine
+    # Heart Beat in the same window. Adoption must scan the whole list (not just
+    # the newest Heart Beat) so the Fall isn't replayed; the new routine may fire.
+    restored_local = datetime(
+        2026, 5, 12, 10, 44, 0, tzinfo=timezone(timedelta(hours=-4))
+    )  # 14:44:00 UTC, minute resolution
+    triggered = datetime(2026, 5, 12, 14, 45, 0, tzinfo=UTC)
+    fall = _alert(datetime(2026, 5, 12, 14, 44, 5, tzinfo=UTC), "Fall")  # finer res
+    beat = _alert(datetime(2026, 5, 12, 14, 50, 0, tzinfo=UTC), "Heart Beat")
+    entry = _entry(hass)
+    restored = State(
+        "event.mom_alert",
+        triggered.isoformat(),
+        {"event_type": "Fall", "observed_at": restored_local.isoformat()},
+    )
+    extra = {
+        "last_event_type": "Fall",
+        "last_event_attributes": {"observed_at": restored_local.isoformat()},
+    }
+    mock_restore_cache_with_extra_data(hass, [(restored, extra)])
+
+    with patch(FETCH, AsyncMock(return_value=_snap(beat, fall))):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # The Fall is adopted (not replayed); the genuinely-new Heart Beat fires.
+    assert _event_type(hass) == "Heart Beat"
+
+
+async def test_new_same_minute_alert_fires_after_second_res_marker(hass):
+    # A v1.0.1 SECOND-resolution marker must not trigger minute-adoption, so a
+    # genuinely-new same-minute alert from downtime still fires (not swallowed).
+    restored_at = datetime(2026, 5, 12, 14, 44, 5, tzinfo=UTC)  # second != 0
+    triggered = datetime(2026, 5, 12, 14, 45, 0, tzinfo=UTC)
+    sos = _alert(datetime(2026, 5, 12, 14, 44, 50, tzinfo=UTC), "SOS")  # same minute
+    entry = _entry(hass)
+    restored = State(
+        "event.mom_alert",
+        triggered.isoformat(),
+        {"event_type": "Fall", "observed_at": restored_at.isoformat()},
+    )
+    extra = {
+        "last_event_type": "Fall",
+        "last_event_attributes": {"observed_at": restored_at.isoformat()},
+    }
+    mock_restore_cache_with_extra_data(hass, [(restored, extra)])
+
+    with patch(FETCH, AsyncMock(return_value=_snap(sos))):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert _event_type(hass) == "SOS"
 
 
 async def test_goes_unavailable_when_coordinator_fails(hass):
