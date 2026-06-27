@@ -120,3 +120,158 @@ DASHBOARD_JSON_OFF_CRADLE = {
         "html_step_counting": "",
     }
 }
+
+# battery_percentage outside 0..100 must be dropped, not surfaced verbatim.
+DASHBOARD_JSON_BATTERY_OUT_OF_RANGE = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"250","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A real alert whose entry omits time_user_tz but carries full-second time_utc;
+# latest_alert must still be built (falling back to time_utc).
+DASHBOARD_JSON_ALERT_NO_USER_TZ = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"80","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"address":"123 Main St","latitude":"42.0","longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# Two distinct alerts in the same wall-clock minute (different seconds); the
+# newest by time_utc (SOS at :50) must win and carry second-resolution time.
+DASHBOARD_JSON_SAME_MINUTE_ALERTS = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"80","time_user_tz":"May 12, 2026 10:44 AM EDT"};'
+            "deviceStatus = ["
+            '{"time_utc":"2026-05-12 14:44:05","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"},'
+            '{"time_utc":"2026-05-12 14:44:50","type":"SOS","time_user_tz":"May 12, 2026 10:44 AM EDT"}'
+            "];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A null element mixed into an otherwise-valid deviceStatus array must not crash
+# the sort or cradle scan; the real alert still parses.
+DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [null, "
+            '{"time_utc":"2026-05-12 14:44:30","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A Fall whose latitude is a non-numeric string: the alert must still be built
+# (so the event fires), with only the bad coordinate nulled out.
+DASHBOARD_JSON_ALERT_BAD_LATLON = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"address":"123 Main St","latitude":"unknown","longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# todaysSteps that deserializes to a non-dict (a list) must not crash.
+DASHBOARD_JSON_STEPS_NONDICT = {
+    "data": {
+        "html_device_status": "",
+        "html_step_counting": "let todaysSteps = JSON.parse('[1,2,3]');",
+    }
+}
+
+# A Fall masked by a newer routine Heart Beat in the same window: latest_alert
+# must still surface the Fall, not the newer heartbeat.
+DASHBOARD_JSON_CRITICAL_MASKED = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = ["
+            '{"time_utc":"2026-05-12 14:46:00","type":"Heart Beat","time_user_tz":"May 12, 2026 10:46 AM EDT"},'
+            '{"time_utc":"2026-05-12 14:44:30","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"}'
+            "];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# battery_percentage as a JSON Infinity literal (json.loads accepts it) must be
+# dropped via OverflowError, not crash the whole poll.
+DASHBOARD_JSON_BATTERY_INFINITY = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":Infinity,"time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# An alert whose time_utc carries milliseconds must keep sub-second resolution.
+DASHBOARD_JSON_ALERT_MILLIS_UTC = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30.500","type":"Fall",'
+            '"time_user_tz":"May 12, 2026 10:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# An alert entry with an out-of-range time_user_tz and no time_utc must be
+# skipped (FetchError swallowed), not crash the whole parse.
+DASHBOARD_JSON_ALERT_BAD_TIMESTAMP = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"type":"Fall","time_user_tz":"May 12, 2026 13:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# Present-but-null html fields (not absent) must not crash the regex .search().
+DASHBOARD_JSON_FIELDS_NULL = {
+    "data": {"html_device_status": None, "html_step_counting": None}
+}
+
+# A Fall whose latitude is a JSON Infinity literal must keep the alert with the
+# non-finite coordinate nulled.
+DASHBOARD_JSON_ALERT_INF_COORD = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"latitude":Infinity,"longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A decimal-string totalSteps and a non-finite totalMiles: steps parse, miles
+# drop, calories survive — one bad sub-field must not discard the others.
+DASHBOARD_JSON_STEPS_MIXED = {
+    "data": {
+        "html_device_status": "",
+        "html_step_counting": (
+            "let todaysSteps = JSON.parse('"
+            r"{\"totalSteps\":\"1929.0\",\"totalMiles\":Infinity,\"totalCalories\":0.41}"
+            "');"
+        ),
+    }
+}

@@ -11,6 +11,7 @@ from custom_components.mymedicalguardian.api import (
 
 from .fixtures import (
     ACCOUNT_LISTS_HTML,
+    ACCOUNT_LISTS_MULTI_HTML,
     DASHBOARD_JSON_FULL,
     HISTORY_PAGE_HTML,
     LOGIN_OK_JSON,
@@ -24,9 +25,11 @@ def _build_transport(
     *,
     login_html: str = LOGIN_PAGE_HTML,
     login_post_body: str = LOGIN_OK_JSON,
+    login_status: int = 200,
     accounts_html: str = ACCOUNT_LISTS_HTML,
     dashboard_payload: object = DASHBOARD_JSON_FULL,
     dashboard_as_json: bool = True,
+    dashboard_status: int = 200,
     history_status: int = 200,
     history_html: str = HISTORY_PAGE_HTML,
 ) -> httpx.MockTransport:
@@ -35,14 +38,14 @@ def _build_transport(
         if url == BASE + "/":
             return httpx.Response(200, text=login_html)
         if url == BASE + "/ajax_handlers/account/login":
-            return httpx.Response(200, text=login_post_body)
+            return httpx.Response(login_status, text=login_post_body)
         if url == BASE + "/account-lists":
             return httpx.Response(200, text=accounts_html)
         if url == BASE + "/ajax_handlers/Account/dashboard/":
             return (
-                httpx.Response(200, json=dashboard_payload)
+                httpx.Response(dashboard_status, json=dashboard_payload)
                 if dashboard_as_json
-                else httpx.Response(200, text=str(dashboard_payload))
+                else httpx.Response(dashboard_status, text=str(dashboard_payload))
             )
         if url == BASE + "/managedcare/location-history":
             return httpx.Response(history_status, text=history_html)
@@ -59,6 +62,7 @@ async def test_full_happy_path():
     async with _make_client(_build_transport()) as c:
         snap = await fetch_snapshot(c, "user", "pass")
     assert snap.device_model == "MGMini-Pearl VZ"
+    assert snap.extra_recipients == 0
     assert len(snap.locations) == 2
     assert snap.battery_percent == 60
     assert snap.charging is True
@@ -67,6 +71,13 @@ async def test_full_happy_path():
     assert snap.steps_today == 1929
     assert snap.latest_alert is not None
     assert snap.latest_alert.type == "On Cradle"
+
+
+async def test_extra_recipients_counted():
+    transport = _build_transport(accounts_html=ACCOUNT_LISTS_MULTI_HTML)
+    async with _make_client(transport) as c:
+        snap = await fetch_snapshot(c, "user", "pass")
+    assert snap.extra_recipients == 1
 
 
 async def test_missing_csrf_raises_fetch_error():
@@ -80,6 +91,34 @@ async def test_login_rejected_raises_auth_error():
     transport = _build_transport(login_post_body='{"error":true,"message":"bad creds"}')
     async with _make_client(transport) as c:
         with pytest.raises(AuthError, match="rejected"):
+            await fetch_snapshot(c, "user", "pass")
+
+
+async def test_login_whitespace_json_still_succeeds():
+    # A successful login serialized with spaces around the colon must parse as
+    # success, not be misread as a credential failure.
+    transport = _build_transport(
+        login_post_body='{"message": "Login successful!", "error": false}'
+    )
+    async with _make_client(transport) as c:
+        snap = await fetch_snapshot(c, "user", "pass")
+    assert snap.battery_percent == 60
+
+
+async def test_login_transient_5xx_raises_fetch_error_not_auth():
+    # A 503 on the login endpoint is transient → FetchError (retry), not an
+    # AuthError that would force the user into a reauth flow.
+    transport = _build_transport(login_status=503, login_post_body="maintenance")
+    async with _make_client(transport) as c:
+        with pytest.raises(FetchError, match="login endpoint"):
+            await fetch_snapshot(c, "user", "pass")
+
+
+async def test_login_200_non_json_raises_fetch_error_not_auth():
+    # A 200 carrying an HTML maintenance page is transient, not bad credentials.
+    transport = _build_transport(login_post_body="<html>down for maintenance</html>")
+    async with _make_client(transport) as c:
+        with pytest.raises(FetchError, match="non-JSON"):
             await fetch_snapshot(c, "user", "pass")
 
 
@@ -104,6 +143,15 @@ async def test_dashboard_non_json_raises_fetch_error():
     )
     async with _make_client(transport) as c:
         with pytest.raises(FetchError, match="non-JSON"):
+            await fetch_snapshot(c, "user", "pass")
+
+
+async def test_dashboard_error_status_raises_fetch_error():
+    # A 500 with a JSON body must fail loudly, not yield an all-None snapshot
+    # reported as success.
+    transport = _build_transport(dashboard_status=500, dashboard_payload={"data": {}})
+    async with _make_client(transport) as c:
+        with pytest.raises(FetchError, match="dashboard XHR returned status"):
             await fetch_snapshot(c, "user", "pass")
 
 

@@ -14,6 +14,7 @@ from custom_components.mymedicalguardian.coordinator import (
     ISSUE_PORTAL_UNREACHABLE,
     PORTAL_UNREACHABLE_AFTER,
     MGCoordinator,
+    async_cleanup_entry,
 )
 
 ENTRY_DATA = {
@@ -41,7 +42,7 @@ class TestRepairIssueLifecycle:
             await coord.async_refresh()
 
         registry = ir.async_get(hass)
-        assert registry.async_get_issue(DOMAIN, ISSUE_PORTAL_UNREACHABLE) is None
+        assert registry.async_get_issue(DOMAIN, coord._issue_id) is None
         assert coord._first_failure_at is not None
 
     async def test_persistent_failure_creates_issue(self, hass):
@@ -55,7 +56,7 @@ class TestRepairIssueLifecycle:
             await coord.async_refresh()
 
         registry = ir.async_get(hass)
-        issue = registry.async_get_issue(DOMAIN, ISSUE_PORTAL_UNREACHABLE)
+        issue = registry.async_get_issue(DOMAIN, coord._issue_id)
         assert issue is not None
         assert issue.translation_placeholders["reason"] == "still down"
 
@@ -65,7 +66,7 @@ class TestRepairIssueLifecycle:
         ir.async_create_issue(
             hass,
             DOMAIN,
-            ISSUE_PORTAL_UNREACHABLE,
+            coord._issue_id,
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_PORTAL_UNREACHABLE,
@@ -80,7 +81,27 @@ class TestRepairIssueLifecycle:
 
         assert coord._first_failure_at is None
         registry = ir.async_get(hass)
-        assert registry.async_get_issue(DOMAIN, ISSUE_PORTAL_UNREACHABLE) is None
+        assert registry.async_get_issue(DOMAIN, coord._issue_id) is None
+
+    async def test_first_failure_persists_across_coordinator_recreation(self, hass):
+        # ConfigEntryNotReady retries recreate the coordinator; the first-failure
+        # time must survive so the 24h repair issue can eventually fire.
+        entry = MockConfigEntry(
+            domain=DOMAIN, unique_id="test@example.com", data=ENTRY_DATA
+        )
+        entry.add_to_hass(hass)
+        coord1 = MGCoordinator(hass, entry)
+        with patch(
+            "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+            AsyncMock(side_effect=FetchError("down")),
+        ):
+            await coord1.async_refresh()
+        first = coord1._first_failure_at
+        assert first is not None
+
+        # A fresh coordinator for the same entry sees the persisted timestamp.
+        coord2 = MGCoordinator(hass, entry)
+        assert coord2._first_failure_at == first
 
     async def test_auth_error_also_clears_portal_issue(self, hass):
         """AuthError proves the portal IS reachable, so any pending
@@ -89,7 +110,7 @@ class TestRepairIssueLifecycle:
         ir.async_create_issue(
             hass,
             DOMAIN,
-            ISSUE_PORTAL_UNREACHABLE,
+            coord._issue_id,
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_PORTAL_UNREACHABLE,
@@ -106,4 +127,66 @@ class TestRepairIssueLifecycle:
         # but the portal-unreachable issue is gone.
         assert coord._first_failure_at is None
         registry = ir.async_get(hass)
-        assert registry.async_get_issue(DOMAIN, ISSUE_PORTAL_UNREACHABLE) is None
+        assert registry.async_get_issue(DOMAIN, coord._issue_id) is None
+
+    async def test_two_entries_keep_independent_repair_issues(self, hass):
+        # Two accounts (two config entries) must not collide on one repair issue:
+        # one entry's recovery must not delete the other's still-valid issue.
+        e1 = MockConfigEntry(
+            domain=DOMAIN,
+            unique_id="a@example.com",
+            data={**ENTRY_DATA, CONF_EMAIL: "a@example.com"},
+        )
+        e2 = MockConfigEntry(
+            domain=DOMAIN,
+            unique_id="b@example.com",
+            data={**ENTRY_DATA, CONF_EMAIL: "b@example.com"},
+        )
+        e1.add_to_hass(hass)
+        e2.add_to_hass(hass)
+        c1, c2 = MGCoordinator(hass, e1), MGCoordinator(hass, e2)
+        c1._first_failure_at = utcnow() - timedelta(hours=48)
+        c2._first_failure_at = utcnow() - timedelta(hours=48)
+        with patch(
+            "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+            AsyncMock(side_effect=FetchError("down")),
+        ):
+            await c1.async_refresh()
+            await c2.async_refresh()
+
+        reg = ir.async_get(hass)
+        assert c1._issue_id != c2._issue_id
+        assert reg.async_get_issue(DOMAIN, c1._issue_id) is not None
+        assert reg.async_get_issue(DOMAIN, c2._issue_id) is not None
+
+        # c1's portal recovers; c2's issue must survive.
+        with patch(
+            "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+            AsyncMock(return_value=Snapshot()),
+        ):
+            await c1.async_refresh()
+        assert reg.async_get_issue(DOMAIN, c1._issue_id) is None
+        assert reg.async_get_issue(DOMAIN, c2._issue_id) is not None
+
+    async def test_cleanup_entry_clears_timestamp_and_repair_issue(self, hass):
+        entry = MockConfigEntry(
+            domain=DOMAIN, unique_id="test@example.com", data=ENTRY_DATA
+        )
+        entry.add_to_hass(hass)
+        coord = MGCoordinator(hass, entry)
+        coord._first_failure_at = utcnow()
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            coord._issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_PORTAL_UNREACHABLE,
+        )
+        assert coord._first_failure_at is not None
+
+        async_cleanup_entry(hass, entry.entry_id)
+
+        assert coord._first_failure_at is None
+        # The orphaned repair issue is gone too.
+        assert ir.async_get(hass).async_get_issue(DOMAIN, coord._issue_id) is None

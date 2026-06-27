@@ -46,7 +46,9 @@ class _Base(CoordinatorEntity[MGCoordinator], BinarySensorEntity):
 
 
 class MGOnlineSensor(_Base):
-    """`on` while the device has phoned home in the last 90 minutes."""
+    """`on` while the device phoned home recently — within a window that is the
+    larger of 90 minutes and the poll interval plus 30 minutes, so a long scan
+    interval doesn't flap a healthy device to off."""
 
     _attr_translation_key = "online"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
@@ -59,7 +61,12 @@ class MGOnlineSensor(_Base):
         loc = self.coordinator.data.latest_location if self.coordinator.data else None
         if not loc:
             return None
-        return (utcnow() - loc.observed_at) < STALE_AFTER
+        # Data is refreshed only at the poll cadence and is legitimately up to one
+        # interval old, so widen the staleness window to interval + 30 min (up to
+        # 150 min at the 120-min max) — otherwise a healthy device flaps to off.
+        interval = self.coordinator.update_interval or timedelta()
+        window = max(STALE_AFTER, interval + timedelta(minutes=30))
+        return (utcnow() - loc.observed_at) < window
 
 
 class MGChargingSensor(_Base):

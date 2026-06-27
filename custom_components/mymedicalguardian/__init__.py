@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .coordinator import MGCoordinator
+from .coordinator import MGCoordinator, async_cleanup_entry
 
 type MGConfigEntry = ConfigEntry[MGCoordinator]
 
@@ -17,6 +17,9 @@ PLATFORMS = [
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: MGConfigEntry) -> bool:
+    # DataUpdateCoordinator.__init__ registers async_shutdown via
+    # config_entry.async_on_unload, so the owned httpx client is closed on
+    # unload, reload, and a failed first refresh without an explicit hook here.
     coordinator = MGCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
@@ -31,3 +34,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: MGConfigEntry) -> bool:
 
 async def _async_reload(hass: HomeAssistant, entry: MGConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: MGConfigEntry) -> None:
+    async_cleanup_entry(hass, entry.entry_id)

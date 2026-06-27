@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.dt import utcnow
+from homeassistant.util.ssl import client_context
 
 from .api import AuthError, FetchError, Snapshot, fetch_snapshot
 from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MIN, DOMAIN
@@ -20,6 +21,11 @@ _LOGGER = logging.getLogger(__name__)
 ISSUE_PORTAL_UNREACHABLE = "portal_unreachable"
 PORTAL_UNREACHABLE_AFTER = timedelta(hours=24)
 ISSUE_URL = "https://github.com/uofm-matt/ha-mymedicalguardian/issues"
+# Keyed by entry_id in hass.data so the first-failure timestamp survives the
+# coordinator being recreated on every ConfigEntryNotReady setup retry —
+# otherwise the 24h repair issue could never fire when the portal is down at
+# initial setup.
+_FAILURE_STORE = f"{DOMAIN}_first_failures"
 
 
 class MGCoordinator(DataUpdateCoordinator[Snapshot]):
@@ -42,8 +48,29 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         )
         self._email: str = entry.data[CONF_EMAIL]
         self._password: str = entry.data[CONF_PASSWORD]
-        self._client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-        self._first_failure_at: datetime | None = None
+        # Pass HA's cached SSL context so constructing the client never builds an
+        # SSLContext on the event loop (a blocking disk read in newer httpx).
+        self._client = httpx.AsyncClient(
+            verify=client_context(), follow_redirects=True, timeout=30.0
+        )
+        self._entry_id = entry.entry_id
+        # Per-entry issue id so two accounts (two config entries) don't collide
+        # on a single domain-wide repair issue.
+        self._issue_id = f"{ISSUE_PORTAL_UNREACHABLE}_{entry.entry_id}"
+        self._warned_multi_account = False
+
+    @property
+    def _first_failure_at(self) -> datetime | None:
+        store: dict[str, datetime] = self.hass.data.get(_FAILURE_STORE, {})
+        return store.get(self._entry_id)
+
+    @_first_failure_at.setter
+    def _first_failure_at(self, value: datetime | None) -> None:
+        store: dict[str, datetime] = self.hass.data.setdefault(_FAILURE_STORE, {})
+        if value is None:
+            store.pop(self._entry_id, None)
+        else:
+            store[self._entry_id] = value
 
     async def _async_update_data(self) -> Snapshot:
         # Login produces a session cookie; clear stale cookies before each
@@ -68,6 +95,15 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
                 translation_placeholders={"reason": reason},
             ) from err
         self._clear_portal_unreachable()
+        if snap.extra_recipients and not self._warned_multi_account:
+            # Once per coordinator lifetime, not every poll.
+            self._warned_multi_account = True
+            _LOGGER.warning(
+                "MyGuardian login has %d additional care recipient(s) beyond the "
+                "default; only the default is currently tracked. Open an issue if "
+                "multi-account support matters.",
+                snap.extra_recipients,
+            )
         return snap
 
     def _record_failure(self, reason: str) -> None:
@@ -80,7 +116,7 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            ISSUE_PORTAL_UNREACHABLE,
+            self._issue_id,
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_PORTAL_UNREACHABLE,
@@ -89,8 +125,16 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
 
     def _clear_portal_unreachable(self) -> None:
         self._first_failure_at = None
-        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PORTAL_UNREACHABLE)
+        ir.async_delete_issue(self.hass, DOMAIN, self._issue_id)
 
     async def async_shutdown(self) -> None:
         await self._client.aclose()
         await super().async_shutdown()
+
+
+def async_cleanup_entry(hass: HomeAssistant, entry_id: str) -> None:
+    """On entry removal, drop the persisted first-failure timestamp and delete any
+    lingering per-entry portal-unreachable repair issue. Done here rather than in
+    async_shutdown, which also runs on every setup-retry where both must survive."""
+    hass.data.get(_FAILURE_STORE, {}).pop(entry_id, None)
+    ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_PORTAL_UNREACHABLE}_{entry_id}")

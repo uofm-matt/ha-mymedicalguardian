@@ -34,10 +34,12 @@ async def test_diagnostics_redacts_credentials_and_coords(hass):
 
     diag = await async_get_config_entry_diagnostics(hass, entry)
 
-    assert diag["entry"]["title"] == "Mom"
+    # The monitored person's name is PII on a medical device — redact it from
+    # both the title and entry data.
+    assert diag["entry"]["title"] == "**REDACTED**"
     assert diag["entry"]["data"][CONF_EMAIL] == "**REDACTED**"
     assert diag["entry"]["data"][CONF_PASSWORD] == "**REDACTED**"
-    assert diag["entry"]["data"][CONF_NAME] == "Mom"
+    assert diag["entry"]["data"][CONF_NAME] == "**REDACTED**"
     assert diag["snapshot"]["device_model"] == "MGMini-Pearl VZ"
     assert diag["snapshot"]["latest_location"] is None
     assert diag["snapshot"]["latest_alert"] is None

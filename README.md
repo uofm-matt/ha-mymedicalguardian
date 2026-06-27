@@ -44,7 +44,7 @@ The integration creates one **device** per configured account (named whatever yo
 | `sensor.<title>_battery` | `sensor` (battery, %) | Device battery percentage |
 | `sensor.<title>_signal` | `sensor` (diagnostic) | Cell signal label — `"Good"`, `"Fair"`, `"Poor"`, or the literal string `"None"` |
 | `sensor.<title>_steps_today` | `sensor` (total_increasing) | Step count for the day. Extra attrs: `miles`, `calories` |
-| `binary_sensor.<title>_online` | `binary_sensor` (connectivity) | `on` if a heartbeat arrived in the last 90 minutes |
+| `binary_sensor.<title>_online` | `binary_sensor` (connectivity) | `on` if a heartbeat arrived recently (≥90 min, and never less than the poll interval + 30 min) |
 | `binary_sensor.<title>_charging` | `binary_sensor` (battery_charging) | `on` while the device sits on its charging cradle |
 | `event.<title>_alert` | `event` | Fires on each new alert: `Heart Beat`, `On Cradle`, `Off Cradle`, `Fall`, `SOS`, `Manual Test`, `Power On`. Use this (not `sensor.<title>_event`'s state change) to automate on Fall/SOS |
 
@@ -56,7 +56,7 @@ This integration tracks a person's location, behaviour, and biometrics — pleas
 - **No third parties** — the integration only talks to `mymedicalguardian.com`. No telemetry, no analytics, no cloud sync.
 - **HA recorder** — every entity-state change is persisted by HA's recorder. By default that's 10 days, configurable via `recorder.purge_keep_days`. Persisted data includes the wearer's coordinates, address strings as MG geocoded them, event types, battery level, signal label, step count, and timestamps. If your HA database is exfiltrated, that history goes with it.
 - **HA event bus / Logbook** — the `event.<title>_alert` entity emits Fall / SOS / Cradle events. The event data carries `address`, `location.{latitude, longitude}`, and `observed_at`. These are visible to anyone with access to HA's UI (Developer Tools → Events, Logbook, automations).
-- **Diagnostics download** — Settings → Devices & Services → ⋮ → Download diagnostics redacts email, password, address, latitude, longitude. It does **not** redact `battery_percent`, `charging`, `signal_label`, `steps_today`, `device_model`, or any `observed_at` / `observed_raw` timestamps. Those describe the wearer's behaviour over time; treat the file as sensitive even after redaction. The bug-report issue template reminds you to sanitise further before posting publicly.
+- **Diagnostics download** — Settings → Devices & Services → ⋮ → Download diagnostics redacts email, password, the device name/title, address, latitude, longitude. It does **not** redact `battery_percent`, `charging`, `signal_label`, `steps_today`, `device_model`, or any `observed_at` / `observed_raw` timestamps. Those describe the wearer's behaviour over time; treat the file as sensitive even after redaction. The bug-report issue template reminds you to sanitise further before posting publicly.
 - **Multi-user HA** — anyone with login access to your HA instance can see all the entity states and attributes above. There is no per-user scoping for caregiver-tracker data.
 
 If you want tighter privacy: shorten `recorder.purge_keep_days`, restrict HA login to a single trusted user, and never paste un-paraphrased diagnostics in a public bug report.
@@ -197,7 +197,7 @@ Drop these in your `automations.yaml` (adjust entity IDs to match your install).
 ## Troubleshooting & filing issues
 
 1. **First check the integration log** at Settings → System → Logs (filter `mymedicalguardian`). Debug-level lines show parser hits/misses.
-2. **Download diagnostics** from Settings → Devices & Services → MyMedicalGuardian Tracker → **⋮ → Download diagnostics**. Email and address are redacted automatically — safe to attach to public issues.
+2. **Download diagnostics** from Settings → Devices & Services → MyMedicalGuardian Tracker → **⋮ → Download diagnostics**. Email, the device name, and address are redacted automatically — safe to attach to public issues.
 3. **Repair UI** — if the portal is unreachable for >24 hours, a repair issue appears in Settings → Repairs with the last error. This is also the canonical sign that something needs your attention.
 4. **Open an issue** at [github.com/uofm-matt/ha-mymedicalguardian/issues](https://github.com/uofm-matt/ha-mymedicalguardian/issues) with the diagnostics download, your HA version, and the symptoms.
 

@@ -14,6 +14,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util.ssl import client_context
 
 from .api import AuthError, FetchError, fetch_snapshot
 from .const import (
@@ -37,7 +38,9 @@ REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
 
 async def _validate(hass: HomeAssistant, email: str, password: str) -> str | None:
     """Return None on success, or an error key for the form."""
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        verify=client_context(), follow_redirects=True, timeout=30.0
+    ) as client:
         try:
             await fetch_snapshot(client, email, password)
         except AuthError:

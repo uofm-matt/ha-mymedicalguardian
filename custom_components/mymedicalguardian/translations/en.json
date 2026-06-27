@@ -19,7 +19,7 @@
       },
       "reconfigure": {
         "title": "MyMedicalGuardian reconfigure",
-        "description": "Update the credentials or display name for {current_email}. Changing the email moves the integration to a different MyGuardian account.",
+        "description": "Update the display name or password for {current_email}. The account email can't be changed here — remove and re-add the integration to track a different account.",
         "data": {
           "name": "Name",
           "email": "Email / username",
