@@ -57,6 +57,10 @@ _TZ_OFFSETS = {
     "ChST": 10, "SST": -11,
 }  # fmt: skip
 
+# Emergency event types that must never be masked by a newer routine entry
+# (heartbeat / cradle) sharing the same poll window.
+_CRITICAL_ALERTS = {"Fall", "SOS"}
+
 
 class AuthError(Exception):
     """Login was rejected."""
@@ -120,21 +124,29 @@ def _parse_when(raw: str) -> datetime:
     mon, day, year, hour, minute, ampm, tz = m.groups()
     if (off := _TZ_OFFSETS.get(tz)) is None:
         raise FetchError(f"unknown timezone abbreviation in {raw!r}")
-    naive = datetime.strptime(
-        f"{mon} {day} {year} {hour}:{minute} {ampm}", "%b %d %Y %I:%M %p"
-    )
+    try:
+        # The regex matches digit ranges loosely (e.g. hour 13, day 32); strptime
+        # is what actually validates them. Funnel its ValueError into FetchError
+        # so every caller's `except FetchError` degrades gracefully.
+        naive = datetime.strptime(
+            f"{mon} {day} {year} {hour}:{minute} {ampm}", "%b %d %Y %I:%M %p"
+        )
+    except ValueError as err:
+        raise FetchError(f"invalid timestamp components in {raw!r}") from err
     return naive.replace(tzinfo=timezone(timedelta(hours=off)))
 
 
 def _parse_utc(raw: str | None) -> datetime | None:
-    """Parse the portal's full-second ``time_utc`` ('2026-05-12 01:31:24') as an
-    aware UTC datetime; return None when absent or malformed."""
+    """Parse the portal's ``time_utc`` as an aware UTC datetime, accepting both
+    the second ('2026-05-12 01:31:24') and millisecond ('...14.060') forms the
+    portal emits; return None when absent or malformed."""
     if not raw:
         return None
     try:
-        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-    except ValueError:
+        parsed = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
         return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _coord(val: Any) -> float | None:
@@ -158,6 +170,26 @@ def _alert_age_key(ev: dict[str, Any]) -> datetime:
         except FetchError:
             pass
     return datetime.min.replace(tzinfo=UTC)
+
+
+def _build_alert(ev: dict[str, Any]) -> Alert | None:
+    """Build an Alert from a deviceStatus entry, or None if it has no usable
+    timestamp. A non-numeric coordinate nulls only that field."""
+    observed_at = _parse_utc(ev.get("time_utc"))
+    if observed_at is None and (raw := ev.get("time_user_tz")):
+        try:
+            observed_at = _parse_when(raw)
+        except FetchError:
+            return None
+    if observed_at is None:
+        return None
+    return Alert(
+        type=ev.get("type", "Unknown"),
+        observed_at=observed_at,
+        address=ev.get("address"),
+        latitude=_coord(ev.get("latitude")),
+        longitude=_coord(ev.get("longitude")),
+    )
 
 
 def _parse_locations(html: str) -> list[Location]:
@@ -211,7 +243,9 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                     fields["battery_percent"] = val
                     if t := bi.get("time_user_tz"):
                         fields["battery_observed_at"] = _parse_when(t)
-        except (ValueError, TypeError, FetchError) as err:
+        except (ValueError, TypeError, OverflowError, FetchError) as err:
+            # OverflowError: json.loads accepts Infinity/NaN, and int(float('inf'))
+            # overflows — drop the field rather than failing the whole poll.
             _LOGGER.debug("batteryInfo unparseable: %s", err)
 
     if m := _DEVICE_STATUS_RE.search(ds):
@@ -233,24 +267,13 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                 break
         # No cradle event in the window ⇒ leave charging None (unknown) rather
         # than asserting a definitive "not charging".
-        if alerts:
-            top = alerts[0]
-            observed_at = _parse_utc(top.get("time_utc"))
-            if observed_at is None and (raw := top.get("time_user_tz")):
-                try:
-                    observed_at = _parse_when(raw)
-                except FetchError as err:
-                    _LOGGER.debug("alert timestamp unparseable: %s", err)
-            if observed_at is not None:
-                # Parse coords independently so one bad value nulls only that
-                # coordinate instead of dropping a whole (possibly Fall/SOS) alert.
-                fields["latest_alert"] = Alert(
-                    type=top.get("type", "Unknown"),
-                    observed_at=observed_at,
-                    address=top.get("address"),
-                    latitude=_coord(top.get("latitude")),
-                    longitude=_coord(top.get("longitude")),
-                )
+        built = [a for ev in alerts if (a := _build_alert(ev)) is not None]
+        if built:
+            # Surface the newest alert, but never let a routine event (heartbeat,
+            # cradle) mask a Fall/SOS still in the window: prefer the newest
+            # critical alert, else the newest overall. (built is newest-first.)
+            critical = [a for a in built if a.type in _CRITICAL_ALERTS]
+            fields["latest_alert"] = (critical or built)[0]
 
     if m := _SIGNAL_LABEL_RE.search(ds):
         fields["signal_label"] = m.group(1).strip()
@@ -267,7 +290,7 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                     fields["miles_today"] = float(mi)
                 if (cal := steps.get("totalCalories")) is not None:
                     fields["calories_today"] = float(cal)
-        except (ValueError, TypeError) as err:
+        except (ValueError, TypeError, OverflowError) as err:
             _LOGGER.debug("todaysSteps unparseable: %s", err)
 
     return fields
@@ -306,8 +329,10 @@ async def fetch_snapshot(
         raise FetchError(f"login endpoint returned status {rp.status_code}")
     try:
         login = rp.json()
-    except json.JSONDecodeError:
-        login = None
+    except json.JSONDecodeError as err:
+        # A 200 carrying an HTML maintenance page is a transient portal issue,
+        # not a credential rejection — don't force the user into a reauth flow.
+        raise FetchError("login XHR returned non-JSON") from err
     if rp.status_code != 200 or not isinstance(login, dict) or login.get("error", True):
         raise AuthError("login rejected — check email/password")
 

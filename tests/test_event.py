@@ -205,3 +205,35 @@ async def test_event_fires_genuinely_new_alert_after_restart(hass):
     state = hass.states.get("event.mom_alert")
     assert state.state != triggered.isoformat(timespec="milliseconds")
     assert state.attributes["event_type"] == "Fall"
+
+
+async def test_event_fires_old_alert_from_downtime_after_restart(hass):
+    # HA was down longer than the fresh-install window and a real Fall happened
+    # during the outage. With a restored prior event, the recency guard must NOT
+    # suppress it — a genuine Fall that occurred while HA was down still fires.
+    old_when = datetime(2026, 5, 12, 14, 44, 5, tzinfo=UTC)
+    triggered = datetime(2026, 5, 12, 14, 45, 0, tzinfo=UTC)
+    fall_during_downtime = _alert(utcnow() - timedelta(minutes=30), "Fall")
+    entry = _entry(hass)
+
+    restored = State(
+        "event.mom_alert",
+        triggered.isoformat(),
+        {"event_type": "Heart Beat", "observed_at": old_when.isoformat()},
+    )
+    extra = {
+        "last_event_type": "Heart Beat",
+        "last_event_attributes": {"observed_at": old_when.isoformat()},
+    }
+    mock_restore_cache_with_extra_data(hass, [(restored, extra)])
+
+    with patch(
+        "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+        AsyncMock(return_value=Snapshot(latest_alert=fall_during_downtime)),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("event.mom_alert")
+    assert state.state != triggered.isoformat(timespec="milliseconds")
+    assert state.attributes["event_type"] == "Fall"

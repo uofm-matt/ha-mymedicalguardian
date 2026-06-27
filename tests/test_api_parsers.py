@@ -11,9 +11,13 @@ from custom_components.mymedicalguardian.api import (
 
 from .fixtures import (
     DASHBOARD_JSON_ALERT_BAD_LATLON,
+    DASHBOARD_JSON_ALERT_BAD_TIMESTAMP,
+    DASHBOARD_JSON_ALERT_MILLIS_UTC,
     DASHBOARD_JSON_ALERT_NO_USER_TZ,
     DASHBOARD_JSON_BATTERY_FLOAT_STRING,
+    DASHBOARD_JSON_BATTERY_INFINITY,
     DASHBOARD_JSON_BATTERY_OUT_OF_RANGE,
+    DASHBOARD_JSON_CRITICAL_MASKED,
     DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM,
     DASHBOARD_JSON_FULL,
     DASHBOARD_JSON_NO_CRADLE,
@@ -39,6 +43,12 @@ class TestParseWhen:
     def test_bad_format_raises(self):
         with pytest.raises(FetchError, match="unrecognized timestamp"):
             _parse_when("not a date")
+
+    def test_invalid_components_raise_fetch_error(self):
+        # Regex matches "13:44 AM" but strptime rejects hour 13 — must surface as
+        # FetchError, not a raw ValueError that escapes callers' guards.
+        with pytest.raises(FetchError, match="invalid timestamp"):
+            _parse_when("May 12, 2026 13:44 AM EDT")
 
     def test_pst_maps_to_los_angeles(self):
         d = _parse_when("Jan 01, 2026 12:00 PM PST")
@@ -153,6 +163,24 @@ class TestParseDashboard:
     def test_non_dict_steps_does_not_crash(self):
         fields = _parse_dashboard(DASHBOARD_JSON_STEPS_NONDICT, device_model=None)
         assert "steps_today" not in fields
+
+    def test_critical_alert_not_masked_by_newer_routine_event(self):
+        # A newer Heart Beat must not hide an in-window Fall.
+        fields = _parse_dashboard(DASHBOARD_JSON_CRITICAL_MASKED, device_model=None)
+        assert fields["latest_alert"].type == "Fall"
+
+    def test_battery_infinity_dropped_not_crash(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_BATTERY_INFINITY, device_model=None)
+        assert "battery_percent" not in fields
+
+    def test_alert_millisecond_time_utc_keeps_subsecond(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_ALERT_MILLIS_UTC, device_model=None)
+        assert fields["latest_alert"].observed_at.microsecond == 500_000
+
+    def test_alert_invalid_timestamp_skipped_not_crash(self):
+        # An out-of-range time_user_tz with no time_utc drops just that alert.
+        fields = _parse_dashboard(DASHBOARD_JSON_ALERT_BAD_TIMESTAMP, device_model=None)
+        assert "latest_alert" not in fields
 
     def test_alert_built_from_time_utc_when_user_tz_missing(self):
         fields = _parse_dashboard(DASHBOARD_JSON_ALERT_NO_USER_TZ, device_model=None)

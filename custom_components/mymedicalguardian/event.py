@@ -21,6 +21,11 @@ from .entity import device_info
 
 PARALLEL_UPDATES = 0
 
+# On a fresh install (no restored event to suppress against) only fire for an
+# alert that occurred within this window of startup, so a days-old Fall/SOS
+# isn't replayed. Fixed rather than tied to the poll interval, which can be 2h.
+FRESH_INSTALL_WINDOW = timedelta(minutes=15)
+
 ALERT_TYPES = [
     "Heart Beat",
     "On Cradle",
@@ -51,6 +56,7 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         self._attr_device_info = device_info(entry, coordinator)
         self._seen: tuple[str, str] | None = None
         self._primed = False
+        self._restored = False
 
     async def async_added_to_hass(self) -> None:
         # CoordinatorEntity hooks up the listener for future updates, but does
@@ -63,25 +69,23 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
             seen_at = (last.last_event_attributes or {}).get("observed_at")
             if last.last_event_type and seen_at:
                 self._seen = (last.last_event_type, seen_at)
+        self._restored = self._seen is not None
         self._handle_coordinator_update()
         self._primed = True
 
     def _is_recent(self, alert: Alert) -> bool:
-        """True if the alert is recent enough to be worth firing on the initial
-        snapshot — bounded by one poll interval so we never replay a days-old
-        Fall/SOS on a fresh install where there's no restored event to suppress."""
-        window = self.coordinator.update_interval or timedelta(minutes=10)
-        return utcnow() - alert.observed_at <= window
+        return utcnow() - alert.observed_at <= FRESH_INSTALL_WINDOW
 
     @callback
     def _handle_coordinator_update(self) -> None:
         alert = self.coordinator.data.latest_alert if self.coordinator.data else None
         if not (alert and alert.type in ALERT_TYPES) or alert.dedup_key == self._seen:
             return
-        # First evaluation after startup (fresh install, or restore cache lost):
-        # record the alert as seen but don't fire if it predates HA coming up.
-        # Live updates after priming always fire on a genuinely new alert.
-        if not self._primed and not self._is_recent(alert):
+        # Fresh install only (no restored event): don't replay an alert that
+        # predates startup. On a restart the restored marker already gates
+        # re-firing, so a genuinely new alert fires regardless of its age — never
+        # silently drop a real Fall/SOS that happened while HA was down.
+        if not self._primed and not self._restored and not self._is_recent(alert):
             self._seen = alert.dedup_key
             return
         self._seen = alert.dedup_key

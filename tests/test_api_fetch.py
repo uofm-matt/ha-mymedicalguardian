@@ -105,6 +105,14 @@ async def test_login_transient_5xx_raises_fetch_error_not_auth():
             await fetch_snapshot(c, "user", "pass")
 
 
+async def test_login_200_non_json_raises_fetch_error_not_auth():
+    # A 200 carrying an HTML maintenance page is transient, not bad credentials.
+    transport = _build_transport(login_post_body="<html>down for maintenance</html>")
+    async with _make_client(transport) as c:
+        with pytest.raises(FetchError, match="non-JSON"):
+            await fetch_snapshot(c, "user", "pass")
+
+
 async def test_history_5xx_raises_fetch_error():
     transport = _build_transport(history_status=500, history_html="oops")
     async with _make_client(transport) as c:

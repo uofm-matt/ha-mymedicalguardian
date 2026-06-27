@@ -7,12 +7,22 @@ Triggered from Settings → Devices & Services → MyMedicalGuardian Tracker
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 
 from . import MGConfigEntry
 
-TO_REDACT = {CONF_EMAIL, CONF_PASSWORD, "address", "latitude", "longitude"}
+# "title" and CONF_NAME both hold the monitored person's name — PII for a
+# medical-alert device, redacted alongside credentials and precise location.
+TO_REDACT = {
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_NAME,
+    "title",
+    "address",
+    "latitude",
+    "longitude",
+}
 
 
 async def async_get_config_entry_diagnostics(

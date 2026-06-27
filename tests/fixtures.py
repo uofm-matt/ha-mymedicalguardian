@@ -193,3 +193,54 @@ DASHBOARD_JSON_STEPS_NONDICT = {
         "html_step_counting": "let todaysSteps = JSON.parse('[1,2,3]');",
     }
 }
+
+# A Fall masked by a newer routine Heart Beat in the same window: latest_alert
+# must still surface the Fall, not the newer heartbeat.
+DASHBOARD_JSON_CRITICAL_MASKED = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = ["
+            '{"time_utc":"2026-05-12 14:46:00","type":"Heart Beat","time_user_tz":"May 12, 2026 10:46 AM EDT"},'
+            '{"time_utc":"2026-05-12 14:44:30","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"}'
+            "];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# battery_percentage as a JSON Infinity literal (json.loads accepts it) must be
+# dropped via OverflowError, not crash the whole poll.
+DASHBOARD_JSON_BATTERY_INFINITY = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":Infinity,"time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# An alert whose time_utc carries milliseconds must keep sub-second resolution.
+DASHBOARD_JSON_ALERT_MILLIS_UTC = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30.500","type":"Fall",'
+            '"time_user_tz":"May 12, 2026 10:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# An alert entry with an out-of-range time_user_tz and no time_utc must be
+# skipped (FetchError swallowed), not crash the whole parse.
+DASHBOARD_JSON_ALERT_BAD_TIMESTAMP = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"type":"Fall","time_user_tz":"May 12, 2026 13:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}

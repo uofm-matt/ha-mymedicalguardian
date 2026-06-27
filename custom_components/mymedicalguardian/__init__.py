@@ -17,11 +17,10 @@ PLATFORMS = [
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: MGConfigEntry) -> bool:
+    # DataUpdateCoordinator.__init__ registers async_shutdown via
+    # config_entry.async_on_unload, so the owned httpx client is closed on
+    # unload, reload, and a failed first refresh without an explicit hook here.
     coordinator = MGCoordinator(hass, entry)
-    # Register the client teardown before the first refresh so HA closes the
-    # coordinator's httpx client on unload, on reload, and on a failed first
-    # refresh (HA runs on_unload callbacks on the setup-retry path too).
-    entry.async_on_unload(coordinator.async_shutdown)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
