@@ -1,6 +1,6 @@
 """Event entity tests — fires on new alert, suppresses unchanged/stale/restored."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
@@ -143,6 +143,63 @@ async def test_event_suppresses_stale_alert_on_fresh_install(hass):
     # Never triggered ⇒ no event timestamp and no event_type.
     assert state.state in (None, "unknown")
     assert state.attributes.get("event_type") is None
+
+
+async def test_event_suppresses_stale_alert_appearing_on_later_poll(hass):
+    # Fresh install: the first poll carries NO alert, then a later poll surfaces a
+    # 3h-old Fall (predating install). It must still be suppressed — the guard
+    # can't lapse just because the first snapshot was empty.
+    entry = _entry(hass)
+    fake = AsyncMock(
+        side_effect=[
+            Snapshot(),
+            Snapshot(latest_alert=_alert(utcnow() - timedelta(hours=3), "Fall")),
+        ]
+    )
+    with patch("custom_components.mymedicalguardian.coordinator.fetch_snapshot", fake):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+    state = hass.states.get("event.mom_alert")
+    assert state.state in (None, "unknown")
+    assert state.attributes.get("event_type") is None
+
+
+async def test_event_no_refire_on_upgrade_from_local_tz_marker(hass):
+    # v1.0.0 persisted observed_at in offset-local form ('...-04:00'); the new
+    # dedup_key is UTC-normalized. The same instant restored from the old form
+    # must still match, so an upgrade doesn't fire a phantom Fall.
+    instant_local = datetime(
+        2026, 5, 12, 10, 44, 5, tzinfo=timezone(timedelta(hours=-4))
+    )
+    triggered = datetime(2026, 5, 12, 14, 45, 0, tzinfo=UTC)
+    entry = _entry(hass)
+
+    restored = State(
+        "event.mom_alert",
+        triggered.isoformat(),
+        {"event_type": "Fall", "observed_at": instant_local.isoformat()},
+    )
+    extra = {
+        "last_event_type": "Fall",
+        "last_event_attributes": {"observed_at": instant_local.isoformat()},
+    }
+    mock_restore_cache_with_extra_data(hass, [(restored, extra)])
+
+    # Same instant, now carried as UTC (as time_utc would yield).
+    same_instant = _alert(instant_local.astimezone(UTC), "Fall")
+    with patch(
+        "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
+        AsyncMock(return_value=Snapshot(latest_alert=same_instant)),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("event.mom_alert")
+    assert state.state == triggered.isoformat(timespec="milliseconds")
+    assert state.attributes["event_type"] == "Fall"
 
 
 async def test_event_does_not_refire_known_alert_after_restart(hass):

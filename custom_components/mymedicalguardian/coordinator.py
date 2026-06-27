@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.dt import utcnow
+from homeassistant.util.ssl import client_context
 
 from .api import AuthError, FetchError, Snapshot, fetch_snapshot
 from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MIN, DOMAIN
@@ -47,8 +48,15 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         )
         self._email: str = entry.data[CONF_EMAIL]
         self._password: str = entry.data[CONF_PASSWORD]
-        self._client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
+        # Pass HA's cached SSL context so constructing the client never builds an
+        # SSLContext on the event loop (a blocking disk read in newer httpx).
+        self._client = httpx.AsyncClient(
+            verify=client_context(), follow_redirects=True, timeout=30.0
+        )
         self._entry_id = entry.entry_id
+        # Per-entry issue id so two accounts (two config entries) don't collide
+        # on a single domain-wide repair issue.
+        self._issue_id = f"{ISSUE_PORTAL_UNREACHABLE}_{entry.entry_id}"
 
     @property
     def _first_failure_at(self) -> datetime | None:
@@ -98,7 +106,7 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            ISSUE_PORTAL_UNREACHABLE,
+            self._issue_id,
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_PORTAL_UNREACHABLE,
@@ -107,8 +115,16 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
 
     def _clear_portal_unreachable(self) -> None:
         self._first_failure_at = None
-        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PORTAL_UNREACHABLE)
+        ir.async_delete_issue(self.hass, DOMAIN, self._issue_id)
 
     async def async_shutdown(self) -> None:
         await self._client.aclose()
         await super().async_shutdown()
+
+
+def forget_failure_state(hass: HomeAssistant, entry_id: str) -> None:
+    """Drop an entry's persisted first-failure timestamp. Called on entry removal
+    so the hass.data store doesn't retain a datetime for a deleted entry. Not done
+    in async_shutdown, which also runs on every setup-retry where the timestamp
+    must survive."""
+    hass.data.get(_FAILURE_STORE, {}).pop(entry_id, None)

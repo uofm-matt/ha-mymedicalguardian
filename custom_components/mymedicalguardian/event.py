@@ -6,7 +6,7 @@ deviceStatus entry appears — perfect for automating on Fall / SOS within one
 poll cycle.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from homeassistant.components.event import EventEntity
 from homeassistant.core import HomeAssistant, callback
@@ -37,6 +37,15 @@ ALERT_TYPES = [
 ]
 
 
+def _to_utc_iso(value: str) -> str:
+    """Normalize a restored observed_at string to the same UTC form dedup_key
+    uses, so a marker persisted by an older build (local offset) still matches."""
+    try:
+        return datetime.fromisoformat(value).astimezone(UTC).isoformat()
+    except ValueError:
+        return value
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: MGConfigEntry,
@@ -55,7 +64,6 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         self._attr_unique_id = f"{entry.entry_id}_alert"
         self._attr_device_info = device_info(entry, coordinator)
         self._seen: tuple[str, str] | None = None
-        self._primed = False
         self._restored = False
 
     async def async_added_to_hass(self) -> None:
@@ -68,10 +76,9 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         if (last := await self.async_get_last_event_data()) is not None:
             seen_at = (last.last_event_attributes or {}).get("observed_at")
             if last.last_event_type and seen_at:
-                self._seen = (last.last_event_type, seen_at)
+                self._seen = (last.last_event_type, _to_utc_iso(seen_at))
         self._restored = self._seen is not None
         self._handle_coordinator_update()
-        self._primed = True
 
     def _is_recent(self, alert: Alert) -> bool:
         return utcnow() - alert.observed_at <= FRESH_INSTALL_WINDOW
@@ -81,11 +88,12 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         alert = self.coordinator.data.latest_alert if self.coordinator.data else None
         if not (alert and alert.type in ALERT_TYPES) or alert.dedup_key == self._seen:
             return
-        # Fresh install only (no restored event): don't replay an alert that
-        # predates startup. On a restart the restored marker already gates
-        # re-firing, so a genuinely new alert fires regardless of its age — never
-        # silently drop a real Fall/SOS that happened while HA was down.
-        if not self._primed and not self._restored and not self._is_recent(alert):
+        # Fresh install only (nothing restored AND nothing seen yet): don't replay
+        # an alert that predates startup, whether it's in the first snapshot or
+        # first surfaces on a later poll. Once an alert has been recorded (or a
+        # marker restored), every genuinely new alert fires regardless of age —
+        # never silently drop a real Fall/SOS that happened while HA was down.
+        if not self._restored and self._seen is None and not self._is_recent(alert):
             self._seen = alert.dedup_key
             return
         self._seen = alert.dedup_key
