@@ -12,9 +12,8 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -32,7 +31,7 @@ _CARD_RE = re.compile(
     re.DOTALL,
 )
 _WHEN_RE = re.compile(
-    r"\b([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) (\d{1,2}):(\d{2}) (AM|PM) ([A-Z]{2,4})\b"
+    r"\b([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) (\d{1,2}):(\d{2}) (AM|PM) ([A-Za-z]{2,4})\b"
 )
 _BATTERY_RE = re.compile(r"const\s+batteryInfo\s*=\s*(\{[^;]+?\})\s*;", re.DOTALL)
 _DEVICE_STATUS_RE = re.compile(r"\bdeviceStatus\s*=\s*(\[.*?\])\s*;", re.DOTALL)
@@ -42,19 +41,21 @@ _SIGNAL_ICON_RE = re.compile(r"images/wifi-([a-z]+)\.svg")
 _MODEL_RE = re.compile(r'"mg_system_name"\s*:\s*"([^"]+)"')
 _SWITCH_ACCOUNTS_RE = re.compile(r'"switch_account"\s*:\s*(\[[^\]]*\])')
 
-_TZ_MAP = {
-    "EST": "America/New_York",
-    "EDT": "America/New_York",
-    "CST": "America/Chicago",
-    "CDT": "America/Chicago",
-    "MST": "America/Denver",
-    "MDT": "America/Denver",
-    "PST": "America/Los_Angeles",
-    "PDT": "America/Los_Angeles",
-    "AKST": "America/Anchorage",
-    "AKDT": "America/Anchorage",
-    "HST": "Pacific/Honolulu",
-}
+# The portal stamps each timestamp with a US timezone abbreviation that already
+# encodes the DST state, so map straight to a fixed UTC offset. Re-deriving the
+# offset from a zone name + wall time (the old approach) was wrong for zones that
+# don't observe DST (Arizona stays MST year-round) and dropped valid abbrevs the
+# zone database doesn't key on (AST, ChST, SST).
+_TZ_OFFSETS = {
+    "EST": -5, "EDT": -4,
+    "CST": -6, "CDT": -5,
+    "MST": -7, "MDT": -6,
+    "PST": -8, "PDT": -7,
+    "AKST": -9, "AKDT": -8,
+    "HST": -10,
+    "AST": -4, "ADT": -3,
+    "ChST": 10, "SST": -11,
+}  # fmt: skip
 
 
 class AuthError(Exception):
@@ -85,6 +86,13 @@ class Alert:
     latitude: float | None = None
     longitude: float | None = None
 
+    @property
+    def dedup_key(self) -> tuple[str, str]:
+        """Stable identity for de-duping. ``observed_at`` carries full-second
+        UTC when the portal supplied ``time_utc``, so two distinct alerts in the
+        same wall-clock minute no longer collapse to one."""
+        return (self.type, self.observed_at.isoformat())
+
 
 @dataclass(slots=True, frozen=True)
 class Snapshot:
@@ -110,14 +118,46 @@ def _parse_when(raw: str) -> datetime:
     if not m:
         raise FetchError(f"unrecognized timestamp: {raw!r}")
     mon, day, year, hour, minute, ampm, tz = m.groups()
+    if (off := _TZ_OFFSETS.get(tz)) is None:
+        raise FetchError(f"unknown timezone abbreviation in {raw!r}")
     naive = datetime.strptime(
         f"{mon} {day} {year} {hour}:{minute} {ampm}", "%b %d %Y %I:%M %p"
     )
+    return naive.replace(tzinfo=timezone(timedelta(hours=off)))
+
+
+def _parse_utc(raw: str | None) -> datetime | None:
+    """Parse the portal's full-second ``time_utc`` ('2026-05-12 01:31:24') as an
+    aware UTC datetime; return None when absent or malformed."""
+    if not raw:
+        return None
     try:
-        zone = ZoneInfo(_TZ_MAP.get(tz, tz))
-    except ZoneInfoNotFoundError as err:
-        raise FetchError(f"unknown timezone abbreviation in {raw!r}") from err
-    return naive.replace(tzinfo=zone)
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _coord(val: Any) -> float | None:
+    """Coerce a portal lat/lon value to float, or None if absent/non-numeric."""
+    if val in (None, ""):
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _alert_age_key(ev: dict[str, Any]) -> datetime:
+    """Sort key for deviceStatus entries: prefer full-second time_utc, fall back
+    to the local time_user_tz, and sort genuinely timeless entries oldest."""
+    if (utc := _parse_utc(ev.get("time_utc"))) is not None:
+        return utc
+    if local := ev.get("time_user_tz"):
+        try:
+            return _parse_when(local)
+        except FetchError:
+            pass
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _parse_locations(html: str) -> list[Location]:
@@ -140,50 +180,77 @@ def _parse_locations(html: str) -> list[Location]:
     return out
 
 
-def _parse_dashboard(
-    payload: dict[str, Any], device_model: str | None
-) -> dict[str, Any]:
+def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
     """Return kwargs suitable for `Snapshot(**fields, locations=...)`."""
-    data = payload.get("data", {})
+    fields: dict[str, Any] = {"device_model": device_model}
+    if not isinstance(payload, dict):
+        # A non-object dashboard body (a JSON list, string, or bare null) would
+        # otherwise crash on payload.get(...); nothing to parse, return early.
+        return fields
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        # A 200 body of {"data": null} reaches here; treat as an empty dashboard.
+        data = {}
     ds = data.get("html_device_status", "")
     steps_html = data.get("html_step_counting", "")
-    fields: dict[str, Any] = {"device_model": device_model}
 
     if m := _BATTERY_RE.search(ds):
         try:
             bi = json.loads(m.group(1))
-            pct = bi.get("battery_percentage")
-            if pct is not None and pct != "":
-                fields["battery_percent"] = int(float(pct))
-            if t := bi.get("time_user_tz"):
-                fields["battery_observed_at"] = _parse_when(t)
+            if isinstance(bi, dict):
+                pct = bi.get("battery_percentage")
+                val: int | None = None
+                if pct is not None and pct != "":
+                    n = int(float(pct))
+                    val = n if 0 <= n <= 100 else None
+                    if val is None:
+                        _LOGGER.debug("battery_percentage out of range: %s", pct)
+                # Only record the reading's timestamp when the reading itself was
+                # accepted, so a dropped value doesn't leave a dangling observed_at.
+                if val is not None:
+                    fields["battery_percent"] = val
+                    if t := bi.get("time_user_tz"):
+                        fields["battery_observed_at"] = _parse_when(t)
         except (ValueError, TypeError, FetchError) as err:
             _LOGGER.debug("batteryInfo unparseable: %s", err)
 
     if m := _DEVICE_STATUS_RE.search(ds):
         try:
-            alerts = json.loads(m.group(1))
-            fields["charging"] = False  # default if parsed but no Cradle alerts yet
-            for ev in alerts:
-                t = ev.get("type", "")
-                if t in {"On Cradle", "Off Cradle"}:
-                    fields["charging"] = t == "On Cradle"
-                    break
-            if alerts and (raw := alerts[0].get("time_user_tz")):
-                lat = alerts[0].get("latitude")
-                lon = alerts[0].get("longitude")
-                try:
-                    fields["latest_alert"] = Alert(
-                        type=alerts[0].get("type", "Unknown"),
-                        observed_at=_parse_when(raw),
-                        address=alerts[0].get("address"),
-                        latitude=float(lat) if lat not in (None, "") else None,
-                        longitude=float(lon) if lon not in (None, "") else None,
-                    )
-                except (ValueError, TypeError, FetchError) as err:
-                    _LOGGER.debug("alert parse failed: %s", err)
+            parsed = json.loads(m.group(1))
         except ValueError as err:
             _LOGGER.debug("deviceStatus unparseable: %s", err)
+            parsed = []
+        # Keep only object entries: a stray null/scalar element in an otherwise
+        # valid array must not crash the sort or the cradle scan below.
+        alerts = [ev for ev in parsed if isinstance(ev, dict)]
+        # Don't trust portal ordering — sort newest-first by timestamp so charging
+        # reflects the most recent cradle transition and latest_alert is newest.
+        alerts.sort(key=_alert_age_key, reverse=True)
+        for ev in alerts:
+            t = ev.get("type", "")
+            if t in {"On Cradle", "Off Cradle"}:
+                fields["charging"] = t == "On Cradle"
+                break
+        # No cradle event in the window ⇒ leave charging None (unknown) rather
+        # than asserting a definitive "not charging".
+        if alerts:
+            top = alerts[0]
+            observed_at = _parse_utc(top.get("time_utc"))
+            if observed_at is None and (raw := top.get("time_user_tz")):
+                try:
+                    observed_at = _parse_when(raw)
+                except FetchError as err:
+                    _LOGGER.debug("alert timestamp unparseable: %s", err)
+            if observed_at is not None:
+                # Parse coords independently so one bad value nulls only that
+                # coordinate instead of dropping a whole (possibly Fall/SOS) alert.
+                fields["latest_alert"] = Alert(
+                    type=top.get("type", "Unknown"),
+                    observed_at=observed_at,
+                    address=top.get("address"),
+                    latitude=_coord(top.get("latitude")),
+                    longitude=_coord(top.get("longitude")),
+                )
 
     if m := _SIGNAL_LABEL_RE.search(ds):
         fields["signal_label"] = m.group(1).strip()
@@ -193,12 +260,13 @@ def _parse_dashboard(
     if m := _STEPS_RE.search(steps_html):
         try:
             steps = json.loads(m.group(1).encode().decode("unicode_escape"))
-            if (s := steps.get("totalSteps")) is not None:
-                fields["steps_today"] = int(s)
-            if (mi := steps.get("totalMiles")) is not None:
-                fields["miles_today"] = float(mi)
-            if (cal := steps.get("totalCalories")) is not None:
-                fields["calories_today"] = float(cal)
+            if isinstance(steps, dict):
+                if (s := steps.get("totalSteps")) is not None:
+                    fields["steps_today"] = int(s)
+                if (mi := steps.get("totalMiles")) is not None:
+                    fields["miles_today"] = float(mi)
+                if (cal := steps.get("totalCalories")) is not None:
+                    fields["calories_today"] = float(cal)
         except (ValueError, TypeError) as err:
             _LOGGER.debug("todaysSteps unparseable: %s", err)
 
@@ -231,7 +299,16 @@ async def fetch_snapshot(
             "Referer": BASE + "/",
         },
     )
-    if rp.status_code != 200 or '"error":false' not in rp.text:
+    # Transient upstream failures on the login endpoint are not credential
+    # problems — surface them as FetchError so the coordinator retries instead
+    # of forcing the user into a reauth flow.
+    if rp.status_code == 429 or rp.status_code >= 500:
+        raise FetchError(f"login endpoint returned status {rp.status_code}")
+    try:
+        login = rp.json()
+    except json.JSONDecodeError:
+        login = None
+    if rp.status_code != 200 or not isinstance(login, dict) or login.get("error", True):
         raise AuthError("login rejected — check email/password")
 
     accounts = await client.get(BASE + "/account-lists", headers=headers)
@@ -257,6 +334,11 @@ async def fetch_snapshot(
             "Referer": BASE + "/dashboard",
         },
     )
+    # Check status before parsing: a 4xx/5xx that still carries a JSON body would
+    # otherwise yield a "successful" snapshot with every dashboard field None,
+    # masking an outage as healthy. Symmetric with the history check below.
+    if dash.status_code != 200:
+        raise FetchError(f"dashboard XHR returned status {dash.status_code}")
     try:
         dash_json = dash.json()
     except json.JSONDecodeError as err:

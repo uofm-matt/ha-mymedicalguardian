@@ -120,3 +120,76 @@ DASHBOARD_JSON_OFF_CRADLE = {
         "html_step_counting": "",
     }
 }
+
+# battery_percentage outside 0..100 must be dropped, not surfaced verbatim.
+DASHBOARD_JSON_BATTERY_OUT_OF_RANGE = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"250","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A real alert whose entry omits time_user_tz but carries full-second time_utc;
+# latest_alert must still be built (falling back to time_utc).
+DASHBOARD_JSON_ALERT_NO_USER_TZ = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"80","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"address":"123 Main St","latitude":"42.0","longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# Two distinct alerts in the same wall-clock minute (different seconds); the
+# newest by time_utc (SOS at :50) must win and carry second-resolution time.
+DASHBOARD_JSON_SAME_MINUTE_ALERTS = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"80","time_user_tz":"May 12, 2026 10:44 AM EDT"};'
+            "deviceStatus = ["
+            '{"time_utc":"2026-05-12 14:44:05","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"},'
+            '{"time_utc":"2026-05-12 14:44:50","type":"SOS","time_user_tz":"May 12, 2026 10:44 AM EDT"}'
+            "];"
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A null element mixed into an otherwise-valid deviceStatus array must not crash
+# the sort or cradle scan; the real alert still parses.
+DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            "deviceStatus = [null, "
+            '{"time_utc":"2026-05-12 14:44:30","type":"Fall","time_user_tz":"May 12, 2026 10:44 AM EDT"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# A Fall whose latitude is a non-numeric string: the alert must still be built
+# (so the event fires), with only the bad coordinate nulled out.
+DASHBOARD_JSON_ALERT_BAD_LATLON = {
+    "data": {
+        "html_device_status": (
+            'const batteryInfo = {"battery_percentage":"70","time_user_tz":"May 12, 2026 09:44 AM EDT"};'
+            'deviceStatus = [{"time_utc":"2026-05-12 14:44:30","type":"Fall",'
+            '"address":"123 Main St","latitude":"unknown","longitude":"-84.0"}];'
+        ),
+        "html_step_counting": "",
+    }
+}
+
+# todaysSteps that deserializes to a non-dict (a list) must not crash.
+DASHBOARD_JSON_STEPS_NONDICT = {
+    "data": {
+        "html_device_status": "",
+        "html_step_counting": "let todaysSteps = JSON.parse('[1,2,3]');",
+    }
+}

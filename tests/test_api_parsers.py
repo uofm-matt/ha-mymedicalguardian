@@ -10,10 +10,16 @@ from custom_components.mymedicalguardian.api import (
 )
 
 from .fixtures import (
+    DASHBOARD_JSON_ALERT_BAD_LATLON,
+    DASHBOARD_JSON_ALERT_NO_USER_TZ,
     DASHBOARD_JSON_BATTERY_FLOAT_STRING,
+    DASHBOARD_JSON_BATTERY_OUT_OF_RANGE,
+    DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM,
     DASHBOARD_JSON_FULL,
     DASHBOARD_JSON_NO_CRADLE,
     DASHBOARD_JSON_OFF_CRADLE,
+    DASHBOARD_JSON_SAME_MINUTE_ALERTS,
+    DASHBOARD_JSON_STEPS_NONDICT,
     HISTORY_PAGE_HTML,
     HISTORY_PAGE_HTML_BAD_ROW,
 )
@@ -37,6 +43,17 @@ class TestParseWhen:
     def test_pst_maps_to_los_angeles(self):
         d = _parse_when("Jan 01, 2026 12:00 PM PST")
         assert d.utcoffset().total_seconds() == -8 * 3600
+
+    def test_arizona_mst_keeps_standard_offset_in_summer(self):
+        # Arizona stays MST (UTC-7) year-round. The abbreviation already encodes
+        # the offset, so a July MST timestamp must not be shifted to MDT.
+        d = _parse_when("Jul 01, 2026 12:00 PM MST")
+        assert d.utcoffset().total_seconds() == -7 * 3600
+
+    def test_atlantic_abbreviation_resolves(self):
+        # AST (Puerto Rico / USVI) is a valid US offset the zone DB doesn't key on.
+        d = _parse_when("May 12, 2026 10:44 AM AST")
+        assert d.utcoffset().total_seconds() == -4 * 3600
 
 
 class TestParseLocations:
@@ -84,9 +101,11 @@ class TestParseDashboard:
         )
         assert fields["battery_percent"] == 60  # int(float("60.5")) → 60
 
-    def test_charging_default_false_with_empty_deviceStatus(self):
+    def test_charging_unknown_with_empty_deviceStatus(self):
+        # No cradle event in the window ⇒ charging is unknown (key absent), not
+        # a definitive "not charging".
         fields = _parse_dashboard(DASHBOARD_JSON_NO_CRADLE, device_model=None)
-        assert fields["charging"] is False
+        assert "charging" not in fields
 
     def test_charging_off_when_latest_is_off_cradle(self):
         fields = _parse_dashboard(DASHBOARD_JSON_OFF_CRADLE, device_model=None)
@@ -95,3 +114,60 @@ class TestParseDashboard:
     def test_empty_payload_returns_only_model(self):
         fields = _parse_dashboard({"data": {}}, device_model="X")
         assert fields == {"device_model": "X"}
+
+    def test_data_null_does_not_crash(self):
+        # A 200 body of {"data": null} must not raise AttributeError.
+        assert _parse_dashboard({"data": None}, device_model="X") == {
+            "device_model": "X"
+        }
+
+    def test_battery_out_of_range_dropped(self):
+        fields = _parse_dashboard(
+            DASHBOARD_JSON_BATTERY_OUT_OF_RANGE, device_model=None
+        )
+        assert "battery_percent" not in fields
+        # No accepted reading ⇒ no dangling observed_at either.
+        assert "battery_observed_at" not in fields
+
+    def test_non_dict_payload_does_not_crash(self):
+        # dash.json() yielding a list / string / null must not raise.
+        assert _parse_dashboard([], device_model="X") == {"device_model": "X"}
+        assert _parse_dashboard("nope", device_model="X") == {"device_model": "X"}
+        assert _parse_dashboard(None, device_model="X") == {"device_model": "X"}
+
+    def test_non_dict_devicestatus_element_does_not_crash(self):
+        # A null element mixed into the array is skipped; the real Fall parses.
+        fields = _parse_dashboard(
+            DASHBOARD_JSON_DEVICESTATUS_NULL_ELEM, device_model=None
+        )
+        assert fields["latest_alert"].type == "Fall"
+
+    def test_bad_coordinate_keeps_alert(self):
+        # A non-numeric latitude nulls only that coord — the Fall alert survives.
+        fields = _parse_dashboard(DASHBOARD_JSON_ALERT_BAD_LATLON, device_model=None)
+        alert = fields["latest_alert"]
+        assert alert.type == "Fall"
+        assert alert.latitude is None
+        assert alert.longitude == -84.0
+
+    def test_non_dict_steps_does_not_crash(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_STEPS_NONDICT, device_model=None)
+        assert "steps_today" not in fields
+
+    def test_alert_built_from_time_utc_when_user_tz_missing(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_ALERT_NO_USER_TZ, device_model=None)
+        alert = fields["latest_alert"]
+        assert alert.type == "Fall"
+        assert alert.observed_at.second == 30  # full-second time_utc preserved
+
+    def test_same_minute_alerts_keep_seconds_and_pick_newest(self):
+        fields = _parse_dashboard(DASHBOARD_JSON_SAME_MINUTE_ALERTS, device_model=None)
+        alert = fields["latest_alert"]
+        # Newest by time_utc wins despite being listed second, and seconds are
+        # retained so it won't collapse with the same-minute Fall.
+        assert alert.type == "SOS"
+        assert alert.observed_at.second == 50
+        # A same-type alert one minute apart-but-same-minute earlier keeps a
+        # distinct dedup key, so the event entity won't collapse the two.
+        earlier = alert.observed_at.replace(second=5)
+        assert alert.dedup_key != (alert.type, earlier.isoformat())
