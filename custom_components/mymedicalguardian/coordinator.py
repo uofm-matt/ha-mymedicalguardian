@@ -122,9 +122,9 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         await super().async_shutdown()
 
 
-def forget_failure_state(hass: HomeAssistant, entry_id: str) -> None:
-    """Drop an entry's persisted first-failure timestamp. Called on entry removal
-    so the hass.data store doesn't retain a datetime for a deleted entry. Not done
-    in async_shutdown, which also runs on every setup-retry where the timestamp
-    must survive."""
+def async_cleanup_entry(hass: HomeAssistant, entry_id: str) -> None:
+    """On entry removal, drop the persisted first-failure timestamp and delete any
+    lingering per-entry portal-unreachable repair issue. Done here rather than in
+    async_shutdown, which also runs on every setup-retry where both must survive."""
     hass.data.get(_FAILURE_STORE, {}).pop(entry_id, None)
+    ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_PORTAL_UNREACHABLE}_{entry_id}")

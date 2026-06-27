@@ -145,6 +145,26 @@ async def test_event_suppresses_stale_alert_on_fresh_install(hass):
     assert state.attributes.get("event_type") is None
 
 
+async def test_event_goes_unavailable_when_coordinator_fails(hass):
+    # A failed poll fires no event, but the entity must still reflect the
+    # coordinator's failure as unavailable (the override now always writes state).
+    from custom_components.mymedicalguardian.api import FetchError
+
+    entry = _entry(hass)
+    fake = AsyncMock(
+        side_effect=[Snapshot(latest_alert=_recent("Fall")), FetchError("portal down")]
+    )
+    with patch("custom_components.mymedicalguardian.coordinator.fetch_snapshot", fake):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("event.mom_alert").state != "unavailable"
+
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+    assert hass.states.get("event.mom_alert").state == "unavailable"
+
+
 async def test_event_suppresses_stale_alert_appearing_on_later_poll(hass):
     # Fresh install: the first poll carries NO alert, then a later poll surfaces a
     # 3h-old Fall (predating install). It must still be suppressed — the guard

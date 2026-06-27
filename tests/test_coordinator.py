@@ -14,7 +14,7 @@ from custom_components.mymedicalguardian.coordinator import (
     ISSUE_PORTAL_UNREACHABLE,
     PORTAL_UNREACHABLE_AFTER,
     MGCoordinator,
-    forget_failure_state,
+    async_cleanup_entry,
 )
 
 ENTRY_DATA = {
@@ -168,14 +168,25 @@ class TestRepairIssueLifecycle:
         assert reg.async_get_issue(DOMAIN, c1._issue_id) is None
         assert reg.async_get_issue(DOMAIN, c2._issue_id) is not None
 
-    async def test_forget_failure_state_clears_persisted_timestamp(self, hass):
+    async def test_cleanup_entry_clears_timestamp_and_repair_issue(self, hass):
         entry = MockConfigEntry(
             domain=DOMAIN, unique_id="test@example.com", data=ENTRY_DATA
         )
         entry.add_to_hass(hass)
         coord = MGCoordinator(hass, entry)
         coord._first_failure_at = utcnow()
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            coord._issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_PORTAL_UNREACHABLE,
+        )
         assert coord._first_failure_at is not None
 
-        forget_failure_state(hass, entry.entry_id)
+        async_cleanup_entry(hass, entry.entry_id)
+
         assert coord._first_failure_at is None
+        # The orphaned repair issue is gone too.
+        assert ir.async_get(hass).async_get_issue(DOMAIN, coord._issue_id) is None

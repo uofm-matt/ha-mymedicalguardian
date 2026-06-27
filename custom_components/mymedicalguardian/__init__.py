@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .coordinator import MGCoordinator, forget_failure_state
+from .coordinator import MGCoordinator, async_cleanup_entry
 
 type MGConfigEntry = ConfigEntry[MGCoordinator]
 
@@ -37,4 +37,4 @@ async def _async_reload(hass: HomeAssistant, entry: MGConfigEntry) -> None:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: MGConfigEntry) -> None:
-    forget_failure_state(hass, entry.entry_id)
+    async_cleanup_entry(hass, entry.entry_id)

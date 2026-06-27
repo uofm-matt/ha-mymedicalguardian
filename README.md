@@ -44,7 +44,7 @@ The integration creates one **device** per configured account (named whatever yo
 | `sensor.<title>_battery` | `sensor` (battery, %) | Device battery percentage |
 | `sensor.<title>_signal` | `sensor` (diagnostic) | Cell signal label — `"Good"`, `"Fair"`, `"Poor"`, or the literal string `"None"` |
 | `sensor.<title>_steps_today` | `sensor` (total_increasing) | Step count for the day. Extra attrs: `miles`, `calories` |
-| `binary_sensor.<title>_online` | `binary_sensor` (connectivity) | `on` if a heartbeat arrived in the last 90 minutes |
+| `binary_sensor.<title>_online` | `binary_sensor` (connectivity) | `on` if a heartbeat arrived recently (≥90 min, and never less than the poll interval + 30 min) |
 | `binary_sensor.<title>_charging` | `binary_sensor` (battery_charging) | `on` while the device sits on its charging cradle |
 | `event.<title>_alert` | `event` | Fires on each new alert: `Heart Beat`, `On Cradle`, `Off Cradle`, `Fall`, `SOS`, `Manual Test`, `Power On`. Use this (not `sensor.<title>_event`'s state change) to automate on Fall/SOS |
 

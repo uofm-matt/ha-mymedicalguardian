@@ -88,6 +88,39 @@ class TestParseWhen:
         d = _parse_when("May 12, 2026 10:44 AM AST")
         assert d.utcoffset().total_seconds() == -4 * 3600
 
+    def test_twelve_hour_boundaries(self):
+        assert _parse_when("Jan 01, 2026 12:00 AM EST").hour == 0
+        assert _parse_when("Jan 01, 2026 12:00 PM EST").hour == 12
+        assert _parse_when("Jan 01, 2026 11:00 PM EST").hour == 23
+
+    def test_all_months_parse(self):
+        names = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]  # fmt: skip
+        for i, mon in enumerate(names, 1):
+            assert _parse_when(f"{mon} 15, 2026 09:00 AM EST").month == i
+
+    def test_parse_when_is_locale_independent(self):
+        # The portal stamps English month/AM-PM; parsing must not depend on the
+        # host LC_TIME, which would otherwise wipe all timestamps on non-US hosts.
+        import locale
+
+        saved = locale.setlocale(locale.LC_TIME)
+        try:
+            for loc in ("de_DE.UTF-8", "de_DE", "fr_FR.UTF-8", "fr_FR"):
+                try:
+                    locale.setlocale(locale.LC_TIME, loc)
+                    break
+                except locale.Error:
+                    continue
+            else:
+                pytest.skip("no non-English LC_TIME locale installed")
+            d = _parse_when("May 12, 2026 10:44 AM EDT")
+            assert d.month == 5 and d.hour == 10
+        finally:
+            locale.setlocale(locale.LC_TIME, saved)
+
 
 class TestParseLocations:
     def test_well_formed_html_returns_sorted_newest_first(self):
@@ -211,6 +244,15 @@ class TestParseDashboard:
         assert _parse_dashboard(DASHBOARD_JSON_FIELDS_NULL, device_model="X") == {
             "device_model": "X"
         }
+
+    def test_truthy_non_string_html_fields_do_not_crash(self):
+        # A number/list/bool/object is truthy, so `or ""` wouldn't catch it — the
+        # isinstance coercion must keep it out of re.search().
+        for bad in (123, ["x"], True, {"k": 1}):
+            assert _parse_dashboard(
+                {"data": {"html_device_status": bad, "html_step_counting": bad}},
+                device_model="X",
+            ) == {"device_model": "X"}
 
     def test_non_finite_coordinate_nulled_keeps_alert(self):
         fields = _parse_dashboard(DASHBOARD_JSON_ALERT_INF_COORD, device_model=None)

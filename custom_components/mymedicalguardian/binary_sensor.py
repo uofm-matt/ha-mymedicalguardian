@@ -46,7 +46,9 @@ class _Base(CoordinatorEntity[MGCoordinator], BinarySensorEntity):
 
 
 class MGOnlineSensor(_Base):
-    """`on` while the device has phoned home in the last 90 minutes."""
+    """`on` while the device phoned home recently — within a window that is the
+    larger of 90 minutes and the poll interval plus 30 minutes, so a long scan
+    interval doesn't flap a healthy device to off."""
 
     _attr_translation_key = "online"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY

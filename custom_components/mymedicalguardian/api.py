@@ -62,6 +62,14 @@ _TZ_OFFSETS = {
 # (heartbeat / cradle) sharing the same poll window.
 _CRITICAL_ALERTS = {"Fall", "SOS"}
 
+# Month lookup so timestamp parsing never depends on the host LC_TIME locale
+# (strptime's %b/%p reject 'May'/'AM' under a non-English locale, which would
+# silently wipe all location + alert data on non-US hosts).
+_MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}  # fmt: skip
+
 
 class AuthError(Exception):
     """Login was rejected."""
@@ -124,15 +132,18 @@ def _parse_when(raw: str) -> datetime:
     if not m:
         raise FetchError(f"unrecognized timestamp: {raw!r}")
     mon, day, year, hour, minute, ampm, tz = m.groups()
+    if (month := _MONTHS.get(mon)) is None:
+        raise FetchError(f"unrecognized month in {raw!r}")
     if (off := _TZ_OFFSETS.get(tz)) is None:
         raise FetchError(f"unknown timezone abbreviation in {raw!r}")
+    # The regex matches digit ranges loosely (e.g. hour 13, day 32); validate the
+    # 12-hour clock by hand and let the datetime ctor reject impossible days.
+    h12, mi = int(hour), int(minute)
+    if not (1 <= h12 <= 12 and 0 <= mi <= 59):
+        raise FetchError(f"invalid timestamp components in {raw!r}")
+    hour24 = h12 % 12 + (12 if ampm == "PM" else 0)
     try:
-        # The regex matches digit ranges loosely (e.g. hour 13, day 32); strptime
-        # is what actually validates them. Funnel its ValueError into FetchError
-        # so every caller's `except FetchError` degrades gracefully.
-        naive = datetime.strptime(
-            f"{mon} {day} {year} {hour}:{minute} {ampm}", "%b %d %Y %I:%M %p"
-        )
+        naive = datetime(int(year), month, int(day), hour24, mi)
     except ValueError as err:
         raise FetchError(f"invalid timestamp components in {raw!r}") from err
     return naive.replace(tzinfo=timezone(timedelta(hours=off)))
@@ -226,10 +237,10 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
     if not isinstance(data, dict):
         # A 200 body of {"data": null} reaches here; treat as an empty dashboard.
         data = {}
-    # `or ""` (not a get-default) because a present-but-null field returns None,
-    # and re.search(None) raises TypeError outside the inner guards below.
-    ds = data.get("html_device_status") or ""
-    steps_html = data.get("html_step_counting") or ""
+    # Coerce to str: a present-but-non-string field (null, a number, a list)
+    # would otherwise reach re.search() and raise TypeError outside the guards.
+    ds = v if isinstance(v := data.get("html_device_status"), str) else ""
+    steps_html = v if isinstance(v := data.get("html_step_counting"), str) else ""
 
     if m := _BATTERY_RE.search(ds):
         try:

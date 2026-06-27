@@ -86,31 +86,33 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         alert = self.coordinator.data.latest_alert if self.coordinator.data else None
-        if not (alert and alert.type in ALERT_TYPES) or alert.dedup_key == self._seen:
-            return
-        # Fresh install only (nothing restored AND nothing seen yet): don't replay
-        # an alert that predates startup, whether it's in the first snapshot or
-        # first surfaces on a later poll. Once an alert has been recorded (or a
-        # marker restored), every genuinely new alert fires regardless of age —
-        # never silently drop a real Fall/SOS that happened while HA was down.
-        if not self._restored and self._seen is None and not self._is_recent(alert):
+        if alert and alert.type in ALERT_TYPES and alert.dedup_key != self._seen:
+            # Fresh install only (nothing restored AND nothing seen yet): don't
+            # replay an alert that predates startup, whether it's in the first
+            # snapshot or first surfaces on a later poll. Once an alert has been
+            # recorded (or a marker restored), every genuinely new alert fires
+            # regardless of age — never drop a real Fall/SOS from HA downtime.
+            suppress = (
+                not self._restored and self._seen is None and not self._is_recent(alert)
+            )
             self._seen = alert.dedup_key
-            return
-        self._seen = alert.dedup_key
-        # Nest coords under `location` so HA's map doesn't sniff lat/lon
-        # at the top of the entity attributes and render this event entity
-        # as an extra pin (the device_tracker is the canonical map source).
-        self._trigger_event(
-            alert.type,
-            {
-                "address": alert.address,
-                "location": {
-                    "latitude": alert.latitude,
-                    "longitude": alert.longitude,
-                },
-                # Persist the same normalized value dedup_key uses, so the marker
-                # restored from this attribute on restart compares identically.
-                "observed_at": alert.dedup_key[1],
-            },
-        )
+            if not suppress:
+                # Nest coords under `location` so HA's map doesn't sniff lat/lon
+                # and render this event entity as an extra pin (the
+                # device_tracker is the canonical map source).
+                self._trigger_event(
+                    alert.type,
+                    {
+                        "address": alert.address,
+                        "location": {
+                            "latitude": alert.latitude,
+                            "longitude": alert.longitude,
+                        },
+                        # Persist the same normalized value dedup_key uses, so the
+                        # marker restored from this attribute matches on restart.
+                        "observed_at": alert.dedup_key[1],
+                    },
+                )
+        # Always write state so availability tracks coordinator success even on a
+        # poll that fires no event.
         self.async_write_ha_state()
