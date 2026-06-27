@@ -11,6 +11,7 @@ from custom_components.mymedicalguardian.api import (
 
 from .fixtures import (
     ACCOUNT_LISTS_HTML,
+    ACCOUNT_LISTS_MULTI_HTML,
     DASHBOARD_JSON_FULL,
     HISTORY_PAGE_HTML,
     LOGIN_OK_JSON,
@@ -61,6 +62,7 @@ async def test_full_happy_path():
     async with _make_client(_build_transport()) as c:
         snap = await fetch_snapshot(c, "user", "pass")
     assert snap.device_model == "MGMini-Pearl VZ"
+    assert snap.extra_recipients == 0
     assert len(snap.locations) == 2
     assert snap.battery_percent == 60
     assert snap.charging is True
@@ -69,6 +71,13 @@ async def test_full_happy_path():
     assert snap.steps_today == 1929
     assert snap.latest_alert is not None
     assert snap.latest_alert.type == "On Cradle"
+
+
+async def test_extra_recipients_counted():
+    transport = _build_transport(accounts_html=ACCOUNT_LISTS_MULTI_HTML)
+    async with _make_client(transport) as c:
+        snap = await fetch_snapshot(c, "user", "pass")
+    assert snap.extra_recipients == 1
 
 
 async def test_missing_csrf_raises_fetch_error():

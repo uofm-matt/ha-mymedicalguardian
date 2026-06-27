@@ -57,6 +57,7 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
         # Per-entry issue id so two accounts (two config entries) don't collide
         # on a single domain-wide repair issue.
         self._issue_id = f"{ISSUE_PORTAL_UNREACHABLE}_{entry.entry_id}"
+        self._warned_multi_account = False
 
     @property
     def _first_failure_at(self) -> datetime | None:
@@ -94,6 +95,15 @@ class MGCoordinator(DataUpdateCoordinator[Snapshot]):
                 translation_placeholders={"reason": reason},
             ) from err
         self._clear_portal_unreachable()
+        if snap.extra_recipients and not self._warned_multi_account:
+            # Once per coordinator lifetime, not every poll.
+            self._warned_multi_account = True
+            _LOGGER.warning(
+                "MyGuardian login has %d additional care recipient(s) beyond the "
+                "default; only the default is currently tracked. Open an issue if "
+                "multi-account support matters.",
+                snap.extra_recipients,
+            )
         return snap
 
     def _record_failure(self, reason: str) -> None:

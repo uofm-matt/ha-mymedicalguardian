@@ -4,9 +4,15 @@ Unlike `sensor.event` (which exposes the latest *location-history* event type as
 a string state), this `EventEntity` triggers HA's event bus the moment a new
 deviceStatus entry appears — perfect for automating on Fall / SOS within one
 poll cycle.
+
+Firing is gated by a monotonic high-water mark (`_fired_through`, the observed_at
+of the newest alert already fired). An alert fires only when it is strictly newer
+than that mark, which means the entity never re-fires an alert, never replays one
+that predates startup, and is immune to the de-dup edge cases (oscillating
+latest_alert, restore-resolution mismatch) a single-slot identity marker had.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from homeassistant.components.event import EventEntity
 from homeassistant.core import HomeAssistant, callback
@@ -21,29 +27,26 @@ from .entity import device_info
 
 PARALLEL_UPDATES = 0
 
-# On a fresh install (no restored event to suppress against) only fire for an
-# alert that occurred within this window of startup, so a days-old Fall/SOS
-# isn't replayed. Fixed rather than tied to the poll interval, which can be 2h.
-FRESH_INSTALL_WINDOW = timedelta(minutes=15)
-
 ALERT_TYPES = [
-    "Heart Beat",
-    "On Cradle",
-    "Off Cradle",
-    "Fall",
-    "SOS",
-    "Manual Test",
-    "Power On",
-]
+    "Heart Beat", "On Cradle", "Off Cradle", "Fall", "SOS", "Manual Test", "Power On",
+]  # fmt: skip
+# Catch-all so a portal-introduced type still fires an automation (HA rejects a
+# _trigger_event type absent from _attr_event_types) instead of being dropped.
+OTHER_ALERT = "Other"
+EVENT_TYPES = [*ALERT_TYPES, OTHER_ALERT]
 
 
-def _to_utc_iso(value: str) -> str:
-    """Normalize a restored observed_at string to the same UTC form dedup_key
-    uses, so a marker persisted by an older build (local offset) still matches."""
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
     try:
-        return datetime.fromisoformat(value).astimezone(UTC).isoformat()
+        return datetime.fromisoformat(value)
     except ValueError:
-        return value
+        return None
+
+
+def _same_minute(a: datetime, b: datetime) -> bool:
+    return a.replace(second=0, microsecond=0) == b.replace(second=0, microsecond=0)
 
 
 async def async_setup_entry(
@@ -57,62 +60,70 @@ async def async_setup_entry(
 class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "alert"
-    _attr_event_types = ALERT_TYPES
+    _attr_event_types = EVENT_TYPES
 
     def __init__(self, coordinator: MGCoordinator, entry: MGConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_alert"
         self._attr_device_info = device_info(entry, coordinator)
-        self._seen: tuple[str, str] | None = None
-        self._restored = False
+        self._fired_through: datetime | None = None
+        self._added_at = utcnow()
 
     async def async_added_to_hass(self) -> None:
-        # CoordinatorEntity hooks up the listener for future updates, but does
-        # not invoke _handle_coordinator_update with whatever's already on the
-        # coordinator at setup time. Seed the de-dup marker from the event HA
-        # restored from before shutdown so a restart doesn't re-fire an alert
-        # that already triggered, then evaluate the initial snapshot once.
+        # CoordinatorEntity wires up future updates but doesn't replay the current
+        # snapshot. Restore the high-water mark from the last event HA persisted
+        # before shutdown, then evaluate the initial snapshot once.
         await super().async_added_to_hass()
+        self._added_at = utcnow()
         if (last := await self.async_get_last_event_data()) is not None:
-            seen_at = (last.last_event_attributes or {}).get("observed_at")
-            if last.last_event_type and seen_at:
-                self._seen = (last.last_event_type, _to_utc_iso(seen_at))
-        self._restored = self._seen is not None
+            self._fired_through = _parse_iso(
+                (last.last_event_attributes or {}).get("observed_at")
+            )
+        # Upgrade safety: a v1.0.0 marker is minute-resolution. If the live alert
+        # is the same event at finer (second) resolution, raise the mark to it
+        # without firing so the upgrade restart doesn't replay it.
+        alert = self.coordinator.data.latest_alert if self.coordinator.data else None
+        hwm = self._fired_through
+        if (
+            hwm is not None
+            and alert is not None
+            and alert.observed_at > hwm
+            and _same_minute(alert.observed_at, hwm)
+        ):
+            self._fired_through = alert.observed_at
         self._handle_coordinator_update()
-
-    def _is_recent(self, alert: Alert) -> bool:
-        return utcnow() - alert.observed_at <= FRESH_INSTALL_WINDOW
 
     @callback
     def _handle_coordinator_update(self) -> None:
         alert = self.coordinator.data.latest_alert if self.coordinator.data else None
-        if alert and alert.type in ALERT_TYPES and alert.dedup_key != self._seen:
-            # Fresh install only (nothing restored AND nothing seen yet): don't
-            # replay an alert that predates startup, whether it's in the first
-            # snapshot or first surfaces on a later poll. Once an alert has been
-            # recorded (or a marker restored), every genuinely new alert fires
-            # regardless of age — never drop a real Fall/SOS from HA downtime.
-            suppress = (
-                not self._restored and self._seen is None and not self._is_recent(alert)
-            )
-            self._seen = alert.dedup_key
-            if not suppress:
-                # Nest coords under `location` so HA's map doesn't sniff lat/lon
-                # and render this event entity as an extra pin (the
-                # device_tracker is the canonical map source).
-                self._trigger_event(
-                    alert.type,
-                    {
-                        "address": alert.address,
-                        "location": {
-                            "latitude": alert.latitude,
-                            "longitude": alert.longitude,
-                        },
-                        # Persist the same normalized value dedup_key uses, so the
-                        # marker restored from this attribute matches on restart.
-                        "observed_at": alert.dedup_key[1],
-                    },
-                )
+        if alert is not None:
+            self._consider(alert)
         # Always write state so availability tracks coordinator success even on a
         # poll that fires no event.
         self.async_write_ha_state()
+
+    def _consider(self, alert: Alert) -> None:
+        # Baseline is the last-fired mark, or — before anything has fired — the
+        # moment monitoring began, so a pre-install alert is never fired no matter
+        # which poll first surfaces it. A genuine post-startup alert is strictly
+        # newer and fires; on a restart the restored mark lets a real alert from
+        # HA downtime through.
+        baseline = self._fired_through or self._added_at
+        if alert.observed_at <= baseline:
+            return
+        self._fired_through = alert.observed_at
+        event_type = alert.type if alert.type in ALERT_TYPES else OTHER_ALERT
+        # Nest coords under `location` so HA's map doesn't sniff lat/lon and render
+        # this event entity as an extra pin (the device_tracker is canonical).
+        self._trigger_event(
+            event_type,
+            {
+                "alert_type": alert.type,
+                "address": alert.address,
+                "location": {
+                    "latitude": alert.latitude,
+                    "longitude": alert.longitude,
+                },
+                "observed_at": alert.observed_at.astimezone(UTC).isoformat(),
+            },
+        )

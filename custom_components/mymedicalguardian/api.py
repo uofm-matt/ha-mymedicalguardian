@@ -21,7 +21,7 @@ import httpx
 _LOGGER = logging.getLogger(__name__)
 
 BASE = "https://www.mymedicalguardian.com"
-UA = "ha-mymedicalguardian/1.0.0"
+UA = "ha-mymedicalguardian/1.0.1"
 
 _CSRF_RE = re.compile(r'name="ci_csrf_token"[^>]*value="([^"]*)"')
 _CARD_RE = re.compile(
@@ -121,6 +121,7 @@ class Snapshot:
     calories_today: float | None = None
     device_model: str | None = None  # "MGMini-Pearl VZ"
     latest_alert: Alert | None = None
+    extra_recipients: int = 0  # care recipients beyond the tracked default
 
     @property
     def latest_location(self) -> Location | None:
@@ -353,15 +354,11 @@ async def fetch_snapshot(
     accounts = await client.get(BASE + "/account-lists", headers=headers)
     model_match = _MODEL_RE.search(accounts.text)
     device_model = model_match.group(1) if model_match else None
+    extra_recipients = 0
     if m := _SWITCH_ACCOUNTS_RE.search(accounts.text):
         try:
             extra = json.loads(m.group(1))
-            if extra:
-                _LOGGER.warning(
-                    "MyGuardian login has %d additional care recipient(s) beyond the default; "
-                    "only the default is currently tracked. Open an issue if multi-account support matters.",
-                    len(extra),
-                )
+            extra_recipients = len(extra) if isinstance(extra, list) else 0
         except ValueError as err:
             _LOGGER.debug("switch_account payload unparseable: %s", err)
 
@@ -391,5 +388,6 @@ async def fetch_snapshot(
     # yet — let entities expose None until data arrives instead of wedging setup.
     return Snapshot(
         locations=_parse_locations(hist.text),
+        extra_recipients=extra_recipients,
         **_parse_dashboard(dash_json, device_model),
     )
