@@ -18,3 +18,5 @@ __pycache__/
 .idea/
 .DS_Store
 uv.lock
+.ha-token
+.mmg-creds*
