@@ -40,7 +40,7 @@ rules:
     status: done
   runtime-data:
     status: done
-    comment: ConfigEntry[MGCoordinator] runtime_data; no hass.data.
+    comment: ConfigEntry[MGCoordinator] runtime_data for entity wiring; hass.data is used only for a small per-entry first-failure timestamp store that must survive coordinator recreation across setup retries.
   test-before-configure:
     status: done
     comment: Config flow validates by calling fetch_snapshot before creating the entry.
@@ -118,7 +118,7 @@ rules:
     comment: icons.json maps translation_key → mdi icon.
   reconfiguration-flow:
     status: done
-    comment: async_step_reconfigure lets users update name/email/password without removing.
+    comment: async_step_reconfigure lets users update the display name and password without removing; the account email is the unique_id and is fixed (the flow aborts on a mismatch).
   repair-issues:
     status: done
     comment: portal_unreachable issue raised after 24h of consecutive fetch failures; auto-resolves on success.

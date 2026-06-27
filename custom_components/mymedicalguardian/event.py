@@ -6,10 +6,12 @@ deviceStatus entry appears — perfect for automating on Fall / SOS within one
 poll cycle.
 
 Firing is gated by a monotonic high-water mark (`_fired_through`, the observed_at
-of the newest alert already fired). An alert fires only when it is strictly newer
-than that mark, which means the entity never re-fires an alert, never replays one
-that predates startup, and is immune to the de-dup edge cases (oscillating
-latest_alert, restore-resolution mismatch) a single-slot identity marker had.
+of the last alert fired). Each poll fires the oldest unfired Fall/SOS — so the
+mark advances minimally and a second simultaneous critical fires on the next poll
+rather than being swallowed — else the newest unfired routine event. An alert
+fires only when strictly newer than the mark, so the entity never re-fires one,
+never replays an alert that predates startup, and is immune to the de-dup edge
+cases (oscillation, restore-resolution mismatch) a single-slot marker had.
 """
 
 from datetime import UTC, datetime
@@ -74,24 +76,29 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         # snapshot. Restore the high-water mark from the last event HA persisted
         # before shutdown, then evaluate the initial snapshot once.
         await super().async_added_to_hass()
+        legacy_marker = False
         if (last := await self.async_get_last_event_data()) is not None:
-            self._fired_through = _parse_iso(
-                (last.last_event_attributes or {}).get("observed_at")
+            attrs = last.last_event_attributes or {}
+            self._fired_through = _parse_iso(attrs.get("observed_at"))
+            # v1.0.0 persisted minute-resolution marks and never set the
+            # 'alert_type' attribute (added in v1.0.1), so its absence is a
+            # reliable legacy signal — unlike the wall-clock seconds, which the
+            # portal legitimately stamps on :00 boundaries.
+            legacy_marker = (
+                self._fired_through is not None and "alert_type" not in attrs
             )
-        self._adopt_minute_resolution_marker()
+        if legacy_marker:
+            self._adopt_minute_resolution_marker()
         self._handle_coordinator_update()
 
     def _adopt_minute_resolution_marker(self) -> None:
-        # v1.0.0 persisted minute-resolution marks (seconds always 00). If the
-        # restored mark looks minute-resolution, an in-window alert in that same
-        # minute is the same already-fired event at finer (second) resolution:
-        # raise the mark to it WITHOUT firing so the upgrade restart doesn't
-        # replay it. Scanning the whole list (not just the newest) keeps a newer
-        # routine event from hiding the still-in-window fired critical. The
-        # seconds==0 gate avoids swallowing a genuinely-new same-minute alert when
-        # the mark is already a v1.0.1 second-resolution value.
+        # Restored mark is a v1.0.0 minute-resolution value. An in-window alert in
+        # that same minute is the same already-fired event at finer (second)
+        # resolution: raise the mark to it WITHOUT firing so the upgrade restart
+        # doesn't replay it. Scan the whole list (not just the newest) so a newer
+        # routine event can't hide the still-in-window fired critical.
         hwm = self._fired_through
-        if hwm is None or hwm.second or hwm.microsecond:
+        if hwm is None:
             return
         alerts = self.coordinator.data.alerts if self.coordinator.data else ()
         same_minute = [
@@ -119,6 +126,8 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
         # through. Fire the OLDEST unfired Fall/SOS first so the mark advances
         # minimally and any newer critical in the same window still fires on the
         # next poll (never swallowed); with no critical, fire the newest routine.
+        # (Two distinct alerts stamped at the exact same second collapse to one
+        # fire — the caregiver is still alerted to that instant.)
         baseline = self._fired_through or self._added_at
         fresh = [a for a in alerts if a.observed_at > baseline]
         if not fresh:

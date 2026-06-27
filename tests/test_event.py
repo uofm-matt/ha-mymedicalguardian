@@ -248,7 +248,10 @@ async def test_no_refire_known_alert_after_restart(hass):
     )
     extra = {
         "last_event_type": "Fall",
-        "last_event_attributes": {"observed_at": when.isoformat()},
+        "last_event_attributes": {
+            "observed_at": when.isoformat(),
+            "alert_type": "Fall",
+        },
     }
     mock_restore_cache_with_extra_data(hass, [(restored, extra)])
 
@@ -273,7 +276,10 @@ async def test_fires_downtime_alert_after_restart(hass):
     )
     extra = {
         "last_event_type": "Heart Beat",
-        "last_event_attributes": {"observed_at": restored_at.isoformat()},
+        "last_event_attributes": {
+            "observed_at": restored_at.isoformat(),
+            "alert_type": "Heart Beat",
+        },
     }
     mock_restore_cache_with_extra_data(hass, [(restored, extra)])
 
@@ -344,10 +350,11 @@ async def test_upgrade_no_refire_fall_with_newer_routine_present(hass):
     assert _event_type(hass) == "Heart Beat"
 
 
-async def test_new_same_minute_alert_fires_after_second_res_marker(hass):
-    # A v1.0.1 SECOND-resolution marker must not trigger minute-adoption, so a
+async def test_new_same_minute_alert_fires_after_v101_marker(hass):
+    # A v1.0.1 marker (carries 'alert_type') must not trigger minute-adoption even
+    # when its seconds land on :00 — which the portal routinely produces — so a
     # genuinely-new same-minute alert from downtime still fires (not swallowed).
-    restored_at = datetime(2026, 5, 12, 14, 44, 5, tzinfo=UTC)  # second != 0
+    restored_at = datetime(2026, 5, 12, 14, 44, 0, tzinfo=UTC)  # :00 seconds!
     triggered = datetime(2026, 5, 12, 14, 45, 0, tzinfo=UTC)
     sos = _alert(datetime(2026, 5, 12, 14, 44, 50, tzinfo=UTC), "SOS")  # same minute
     entry = _entry(hass)
@@ -358,7 +365,10 @@ async def test_new_same_minute_alert_fires_after_second_res_marker(hass):
     )
     extra = {
         "last_event_type": "Fall",
-        "last_event_attributes": {"observed_at": restored_at.isoformat()},
+        "last_event_attributes": {
+            "observed_at": restored_at.isoformat(),
+            "alert_type": "Fall",  # marks this as a v1.0.1 (second-resolution) mark
+        },
     }
     mock_restore_cache_with_extra_data(hass, [(restored, extra)])
 
