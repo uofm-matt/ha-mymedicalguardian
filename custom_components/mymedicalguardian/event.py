@@ -21,7 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
 from . import MGConfigEntry
-from .api import Alert
+from .api import _CRITICAL_ALERTS, Alert
 from .coordinator import MGCoordinator
 from .entity import device_info
 
@@ -95,22 +95,29 @@ class MGAlertEvent(CoordinatorEntity[MGCoordinator], EventEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        alert = self.coordinator.data.latest_alert if self.coordinator.data else None
-        if alert is not None:
-            self._consider(alert)
+        alerts = self.coordinator.data.alerts if self.coordinator.data else ()
+        if alert := self._pick(alerts):
+            self._fire(alert)
         # Always write state so availability tracks coordinator success even on a
         # poll that fires no event.
         self.async_write_ha_state()
 
-    def _consider(self, alert: Alert) -> None:
+    def _pick(self, alerts: tuple[Alert, ...]) -> Alert | None:
         # Baseline is the last-fired mark, or — before anything has fired — the
         # moment monitoring began, so a pre-install alert is never fired no matter
         # which poll first surfaces it. A genuine post-startup alert is strictly
-        # newer and fires; on a restart the restored mark lets a real alert from
-        # HA downtime through.
+        # newer; on a restart the restored mark lets a real HA-downtime alert
+        # through. Among the unfired alerts, surface the newest Fall/SOS first so
+        # a critical event is never delayed by a routine one; the rest fire on the
+        # following polls (each advances the mark).
         baseline = self._fired_through or self._added_at
-        if alert.observed_at <= baseline:
-            return
+        fresh = [a for a in alerts if a.observed_at > baseline]
+        if not fresh:
+            return None
+        critical = [a for a in fresh if a.type in _CRITICAL_ALERTS]
+        return (critical or fresh)[0]  # alerts are newest-first
+
+    def _fire(self, alert: Alert) -> None:
         self._fired_through = alert.observed_at
         event_type = alert.type if alert.type in ALERT_TYPES else OTHER_ALERT
         # Nest coords under `location` so HA's map doesn't sniff lat/lon and render

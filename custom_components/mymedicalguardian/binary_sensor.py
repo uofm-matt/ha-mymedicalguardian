@@ -62,8 +62,8 @@ class MGOnlineSensor(_Base):
         if not loc:
             return None
         # Data is refreshed only at the poll cadence and is legitimately up to one
-        # interval old, so widen the staleness window past the configured interval
-        # (up to 120 min) — otherwise a healthy device flaps to "disconnected".
+        # interval old, so widen the staleness window to interval + 30 min (up to
+        # 150 min at the 120-min max) — otherwise a healthy device flaps to off.
         interval = self.coordinator.update_interval or timedelta()
         window = max(STALE_AFTER, interval + timedelta(minutes=30))
         return (utcnow() - loc.observed_at) < window

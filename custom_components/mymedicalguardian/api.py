@@ -99,14 +99,6 @@ class Alert:
     latitude: float | None = None
     longitude: float | None = None
 
-    @property
-    def dedup_key(self) -> tuple[str, str]:
-        """Instant-based identity for de-duping. Normalized to UTC so the SAME
-        alert keys identically whether the portal supplied time_utc (+00:00) or
-        only the offset-aware time_user_tz — otherwise it would re-fire when the
-        source field flips across polls or a restart."""
-        return (self.type, self.observed_at.astimezone(UTC).isoformat())
-
 
 @dataclass(slots=True, frozen=True)
 class Snapshot:
@@ -120,12 +112,16 @@ class Snapshot:
     miles_today: float | None = None
     calories_today: float | None = None
     device_model: str | None = None  # "MGMini-Pearl VZ"
-    latest_alert: Alert | None = None
+    alerts: tuple[Alert, ...] = ()  # recent deviceStatus events, newest-first
     extra_recipients: int = 0  # care recipients beyond the tracked default
 
     @property
     def latest_location(self) -> Location | None:
         return self.locations[0] if self.locations else None
+
+    @property
+    def latest_alert(self) -> Alert | None:
+        return self.alerts[0] if self.alerts else None
 
 
 def _parse_when(raw: str) -> datetime:
@@ -167,6 +163,10 @@ def _finite_float(val: Any) -> float | None:
     """Coerce a portal value to a finite float, or None if absent / non-numeric /
     non-finite. json.loads accepts bare Infinity/NaN literals, so the isfinite
     check is what keeps them out of coords, battery, miles, and calories."""
+    # bool is an int subclass; float(True) == 1.0 would otherwise slip a JSON
+    # boolean through as a real-looking 0.0/1.0 coordinate or battery reading.
+    if isinstance(val, bool):
+        return None
     try:
         f = float(val)
     except (ValueError, TypeError):
@@ -279,13 +279,11 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                 break
         # No cradle event in the window ⇒ leave charging None (unknown) rather
         # than asserting a definitive "not charging".
-        built = [a for ev in alerts if (a := _build_alert(ev)) is not None]
-        if built:
-            # Surface the newest alert, but never let a routine event (heartbeat,
-            # cradle) mask a Fall/SOS still in the window: prefer the newest
-            # critical alert, else the newest overall. (built is newest-first.)
-            critical = [a for a in built if a.type in _CRITICAL_ALERTS]
-            fields["latest_alert"] = (critical or built)[0]
+        # Expose the full recent-alerts list (newest-first) so the event entity
+        # can fire each genuinely-new event and prioritise Fall/SOS itself,
+        # without a single latest_alert slot masking one event with another.
+        if built := tuple(a for ev in alerts if (a := _build_alert(ev)) is not None):
+            fields["alerts"] = built
 
     if m := _SIGNAL_LABEL_RE.search(ds):
         fields["signal_label"] = m.group(1).strip()
@@ -318,9 +316,9 @@ async def fetch_snapshot(
 ) -> Snapshot:
     """Log in once and pull both feeds in a single session.
 
-    Takes an externally-owned ``httpx.AsyncClient`` (the coordinator passes
-    one created via HA's ``create_async_httpx_client``). Caller is responsible
-    for closing the client; we just borrow it.
+    Takes an externally-owned, cookie-stateful ``httpx.AsyncClient`` (the
+    coordinator builds one with HA's cached ``client_context()`` SSL context and
+    ``follow_redirects=True``). Caller owns closing it; we just borrow it.
     """
     headers = {"User-Agent": UA}
     r = await client.get(BASE + "/", headers=headers)
