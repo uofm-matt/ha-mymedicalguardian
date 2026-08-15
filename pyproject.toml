@@ -1,3 +1,20 @@
+[project]
+name = "mmg"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-homeassistant-custom-component==0.13.195",
+]
+
+[tool.uv]
+package = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
