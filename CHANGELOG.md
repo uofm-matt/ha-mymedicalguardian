@@ -4,6 +4,8 @@ Newest first, one entry per change: what changed, then why.
 
 ## 2026-10-10
 
+- Drop `httpx>=0.27` from the manifest `requirements` — Hassfest rejects it because Home Assistant ships httpx itself, and the scheduled Validate run had been red since at least 2026-10-08.
+
 Fixes from the 2026-10-07 codereview audit (`~/projects/codereview/reports/mmg/2026-10-07-audit.md`), unreleased.
 
 ### Fall / SOS safety
