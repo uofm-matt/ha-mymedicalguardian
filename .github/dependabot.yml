@@ -10,7 +10,7 @@ updates:
       interval: weekly
     # pytest-homeassistant-custom-component pins pytest, pytest-asyncio and
     # pytest-cov exactly, so they move only with it. It is held at the newest
-    # release that still runs on Python 3.12; CI's latest job covers newer ones.
+    # release that still runs on Python 3.12.
     ignore:
       - dependency-name: pytest
       - dependency-name: pytest-asyncio
