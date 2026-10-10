@@ -20,3 +20,6 @@ __pycache__/
 uv.lock
 .ha-token
 .mmg-creds*
+
+# local review config
+.claude/review.toml
