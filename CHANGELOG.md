@@ -2,6 +2,12 @@
 
 Newest first, one entry per change: what changed, then why.
 
+## 2026-10-10 (after 1.0.2)
+
+- CI tests run a matrix: Home Assistant 2024.12 (0.13.195) and 2025.1 (0.13.205) on Python 3.12, plus a non-blocking latest on Python 3.14 — the 84 tests had only ever run on one two-year-old stack.
+- Test pins move to pytest-homeassistant-custom-component 0.13.205 (HA 2025.1.4, pytest 8.3.4); Dependabot's separate pytest, pytest-asyncio and pytest-cov bumps conflict with that package's pins, so they were closed.
+- Actions: checkout v7, setup-python v7, setup-uv v7 (Dependabot) — current majors.
+
 ## 1.0.2 — 2026-10-10
 
 Upgrade notes:

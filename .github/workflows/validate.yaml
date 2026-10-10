@@ -11,14 +11,14 @@ jobs:
     name: Hassfest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: home-assistant/actions/hassfest@master
 
   hacs:
     name: HACS
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hacs/action@main
         with:
           category: integration
@@ -27,7 +27,7 @@ jobs:
     name: Ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - run: uvx ruff@0.17.0 check custom_components/ tests/
       - run: uvx ruff@0.17.0 format --check custom_components/ tests/
@@ -36,7 +36,7 @@ jobs:
     name: Mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -44,12 +44,33 @@ jobs:
       - run: mypy custom_components/mymedicalguardian/
 
   tests:
-    name: Tests
+    name: Tests (${{ matrix.name }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # hacs.json declares 2024.11.0; 0.13.195 is the oldest Home Assistant
+          # test stack on Python 3.12 that this repo has been validated against.
+          - name: HA 2024.12 (floor)
+            python: "3.12"
+            ha_tests: "==0.13.195"
+            experimental: false
+          - name: HA 2025.1 (py3.12 line)
+            python: "3.12"
+            ha_tests: "==0.13.205"
+            experimental: false
+          # Canary for the Python 3.14 line current Home Assistant now requires.
+          - name: HA latest
+            python: "3.14"
+            ha_tests: ""
+            experimental: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: pip install -r requirements_test.txt
+      - run: pip install "pytest-homeassistant-custom-component${{ matrix.ha_tests }}"
       - run: pytest
