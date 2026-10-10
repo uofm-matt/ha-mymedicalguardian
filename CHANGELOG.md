@@ -4,6 +4,7 @@ Newest first, one entry per change: what changed, then why.
 
 ## 2026-10-10 (after 1.0.2)
 
+- `.gitignore` ignores `.carburize-review-token` — the repo is public and the per-repo review token must never be committed.
 - Mutation gate for `api.py` (`tests/mutation_triage.toml`, `[tool.mutmut]`): 438 of 466 mutants killed, the other 28 triaged as equivalent, plus 5 hand-written sentinels over `api.py` and `event.py`. `event.py` cannot be mutated by mutmut because every mutant segfaults under its fork with the Home Assistant fixtures, so its load-bearing lines are pinned by sentinels.
 - The gate found `_CRITICAL_ALERTS` had become vestigial after the whole-word rewrite (the regex hard-coded `fall|sos`); the regex is now built from the set, so the set is the single source.
 - New tests pin the portal wire contract (login form fields, XHR headers, user agent), battery bounds and timestamp, clock-time bounds, coordinates on alerts, and exact error messages.

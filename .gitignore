@@ -24,3 +24,6 @@ uv.lock
 # local review config
 .claude/review.toml
 mutants/
+
+# per-repo review token (never commit)
+.carburize-review-token
