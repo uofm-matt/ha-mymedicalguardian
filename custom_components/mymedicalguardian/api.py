@@ -40,7 +40,6 @@ _DEVICE_STATUS_RE = re.compile(r"\bdeviceStatus\s*=\s*(?=\[)")
 _NOT_CRITICAL_RE = re.compile(
     r"cancel|clear|dismiss|resolv|false|test|disabl", re.IGNORECASE
 )
-_CRITICAL_RE = re.compile(r"\b(fall|sos)\b", re.IGNORECASE)
 _STEPS_RE = re.compile(r"todaysSteps\s*=\s*JSON\.parse\(\s*'((?:\\.|[^'\\])*)'\s*\)")
 _SIGNAL_LABEL_RE = re.compile(r"SIGNAL</h4>\s*<p[^>]*>\s*([A-Za-z]+)\s*</p>", re.DOTALL)
 _SIGNAL_ICON_RE = re.compile(r"images/wifi-([a-z]+)\.svg")
@@ -66,6 +65,9 @@ _TZ_OFFSETS = {
 # Emergency event types that must never be masked by a newer routine entry
 # (heartbeat / cradle) sharing the same poll window.
 _CRITICAL_ALERTS = {"Fall", "SOS"}
+_CRITICAL_RE = re.compile(
+    r"\b(" + "|".join(sorted(_CRITICAL_ALERTS)) + r")\b", re.IGNORECASE
+)
 
 
 def critical_type(alert_type: object) -> str | None:
@@ -81,7 +83,7 @@ def critical_type(alert_type: object) -> str | None:
         return None
     if not (m := _CRITICAL_RE.search(alert_type)):
         return None
-    return "SOS" if m.group(1).casefold() == "sos" else "Fall"
+    return next(c for c in _CRITICAL_ALERTS if c.casefold() == m.group(1).casefold())
 
 
 def _unescape_js(raw: str) -> str:
@@ -258,7 +260,9 @@ def _parse_locations(html: str) -> list[Location]:
                 )
             )
         except (ValueError, FetchError) as err:
-            _LOGGER.debug("skipping unparseable card (%s): %s", when, err)
+            _LOGGER.debug(
+                "skipping unparseable card (%s): %s", when, err
+            )  # pragma: no mutate
     out.sort(key=lambda loc: loc.observed_at, reverse=True)
     return out
 
@@ -286,7 +290,9 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                 pct = _finite_float(bi.get("battery_percentage"))
                 val = int(pct) if pct is not None and 0 <= pct <= 100 else None
                 if pct is not None and val is None:
-                    _LOGGER.debug("battery_percentage out of range: %s", pct)
+                    _LOGGER.debug(
+                        "battery_percentage out of range: %s", pct
+                    )  # pragma: no mutate
                 # Only record the reading's timestamp when the reading itself was
                 # accepted, so a dropped value doesn't leave a dangling observed_at.
                 if val is not None:
@@ -294,7 +300,7 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
                     if t := bi.get("time_user_tz"):
                         fields["battery_observed_at"] = _parse_when(t)
         except (ValueError, TypeError, FetchError) as err:
-            _LOGGER.debug("batteryInfo unparseable: %s", err)
+            _LOGGER.debug("batteryInfo unparseable: %s", err)  # pragma: no mutate
 
     # A non-empty dashboard fragment without a parseable deviceStatus block is
     # portal markup drift. Raise so the coordinator counts it toward the
@@ -338,7 +344,7 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
         try:
             steps = json.loads(_unescape_js(m.group(1)))
         except (ValueError, TypeError) as err:
-            _LOGGER.debug("todaysSteps unparseable: %s", err)
+            _LOGGER.debug("todaysSteps unparseable: %s", err)  # pragma: no mutate
             steps = None
         if isinstance(steps, dict):
             # Parse each field independently so one bad sub-field (a decimal
@@ -411,7 +417,9 @@ async def fetch_snapshot(
             extra = json.loads(m.group(1))
             extra_recipients = len(extra) if isinstance(extra, list) else 0
         except ValueError as err:
-            _LOGGER.debug("switch_account payload unparseable: %s", err)
+            _LOGGER.debug(
+                "switch_account payload unparseable: %s", err
+            )  # pragma: no mutate
 
     dash = await client.get(
         BASE + "/ajax_handlers/Account/dashboard/",

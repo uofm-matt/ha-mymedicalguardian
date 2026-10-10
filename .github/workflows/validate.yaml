@@ -73,4 +73,4 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements_test.txt
       - run: pip install "pytest-homeassistant-custom-component${{ matrix.ha_tests }}"
-      - run: pytest
+      - run: pytest --cov-fail-under=90

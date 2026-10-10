@@ -4,6 +4,10 @@ Newest first, one entry per change: what changed, then why.
 
 ## 2026-10-10 (after 1.0.2)
 
+- Mutation gate for `api.py` (`tests/mutation_triage.toml`, `[tool.mutmut]`): 438 of 466 mutants killed, the other 28 triaged as equivalent, plus 5 hand-written sentinels over `api.py` and `event.py`. `event.py` cannot be mutated by mutmut because every mutant segfaults under its fork with the Home Assistant fixtures, so its load-bearing lines are pinned by sentinels.
+- The gate found `_CRITICAL_ALERTS` had become vestigial after the whole-word rewrite (the regex hard-coded `fall|sos`); the regex is now built from the set, so the set is the single source.
+- New tests pin the portal wire contract (login form fields, XHR headers, user agent), battery bounds and timestamp, clock-time bounds, coordinates on alerts, and exact error messages.
+- `--cov-fail-under=90` moved from pytest `addopts` to the CI command, so a partial test selection (mutation runs) no longer fails on coverage.
 - CI tests run a matrix: Home Assistant 2024.12 (0.13.195) and 2025.1 (0.13.205) on Python 3.12, plus a non-blocking latest on Python 3.14 — the 84 tests had only ever run on one two-year-old stack.
 - Test pins move to pytest-homeassistant-custom-component 0.13.205 (HA 2025.1.4, pytest 8.3.4); Dependabot's separate pytest, pytest-asyncio and pytest-cov bumps conflict with that package's pins, so they were closed.
 - Actions: checkout v7, setup-python v7, setup-uv v7 (Dependabot) — current majors.

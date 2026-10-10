@@ -1,0 +1,157 @@
+# The mutation gate's declared load-bearing set: the Fall/SOS firing path and the
+# portal parsers. Read by ~/.claude/review/mutation.py. A survivor listed below is a
+# claim with a reason attached; the runner also fails on a listed mutant that no longer
+# survives, so a closed gap forces its entry out of this file.
+
+[gate]
+# api.py only. Every mutant of event.py reports "segfault": mutmut forks pytest
+# in-process and the Home Assistant fixtures the event tests need do not survive the
+# fork (measured 2026-10-10, 174 of 174). event.py's load-bearing lines are pinned by
+# [[sentinel]] entries below instead, which run the suite normally.
+scope = [
+    "custom_components.mymedicalguardian.api.*",
+]
+
+[[sentinel]]
+file = "custom_components/mymedicalguardian/api.py"
+find = '_CRITICAL_ALERTS = {"Fall", "SOS"}'
+replace = '_CRITICAL_ALERTS = {"Fall"}'
+why = "SOS stops being critical; a newer routine event can then outrank it. Killed by test_sos_fires_before_newer_routine."
+
+[[sentinel]]
+file = "custom_components/mymedicalguardian/event.py"
+find = "and (key := (a.type, a.observed_at)) not in self._fired"
+replace = "and (key := (a.type, a.observed_at)) is not None"
+why = "Drops the fired-set check, so every poll re-fires every in-window alert. Killed by test_does_not_refire_same_alert."
+
+[[sentinel]]
+file = "custom_components/mymedicalguardian/api.py"
+find = "if m is None and ds.strip():"
+replace = "if False:"
+why = "Dashboard markup drift returns an alert-less snapshot again, with no FetchError, so Fall/SOS detection is silently off. Killed by test_drifted_device_status_raises_fetch_error."
+
+[[sentinel]]
+file = "custom_components/mymedicalguardian/api.py"
+find = 'login.get("error", True)'
+replace = 'login.get("error", False)'
+why = "A 200 login body with no error key is accepted as success. Killed by test_login_200_without_error_key_is_rejected."
+
+[[sentinel]]
+file = "custom_components/mymedicalguardian/event.py"
+find = "mark = min(alert.observed_at, utcnow())"
+replace = "mark = alert.observed_at"
+why = "A skewed future stamp persists as the restart baseline and swallows real alerts after a restart. Killed by test_persisted_mark_never_exceeds_now."
+
+# --- accepted survivors: every one is an equivalent mutant (reason on each) ---
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_116"
+why = "equivalent: the isinstance(steps, dict) guard treats None and '' the same."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_18"
+why = "equivalent: a placeholder string never matches the steps regex, same as ''."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_39"
+why = "equivalent: only the condition that guards a debug log line."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_40"
+why = "equivalent: only the condition that guards a debug log line."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_41"
+why = "equivalent: only the condition that guards a debug log line."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_42"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_dashboard__mutmut_43"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_locations__mutmut_28"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_locations__mutmut_29"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__parse_when__mutmut_24"
+why = "equivalent: minute 60 reaches datetime(), whose ValueError is re-raised as the same FetchError message."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__unescape_js__mutmut_11"
+why = "equivalent: Python codec names are case-insensitive."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x__unescape_js__mutmut_7"
+why = "equivalent: Python codec names are case-insensitive."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_106"
+why = "equivalent: the 'switch_account' regex only matches a JSON array, so the non-list branch is unreachable."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_107"
+why = "equivalent: the 'switch_account' regex only matches a JSON array, so the non-list branch is unreachable."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_108"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_109"
+why = "equivalent: debug log text; no behavior reads it."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_120"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_121"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_126"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_127"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_3"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_38"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_39"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_4"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_44"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_45"
+why = "equivalent: HTTP header names are case-insensitive (httpx normalises them); the wire contract is pinned by test_portal_request_contract."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_51"
+why = "equivalent: status 500 skips this branch, then reaches the != 200 branch, which raises FetchError with the same message."
+
+[[survivor]]
+mutant = "custom_components.mymedicalguardian.api.x_fetch_snapshot__mutmut_52"
+why = "equivalent: status 500 skips this branch, then reaches the != 200 branch, which raises FetchError with the same message."

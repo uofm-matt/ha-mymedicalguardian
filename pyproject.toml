@@ -19,7 +19,7 @@ package = false
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "--cov=custom_components.mymedicalguardian --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=custom_components.mymedicalguardian --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["custom_components/mymedicalguardian"]
@@ -67,3 +67,17 @@ disallow_untyped_calls = true
 disallow_untyped_decorators = true
 disallow_untyped_defs = true
 disable_error_code = ["import-untyped"]
+
+[tool.mutmut]
+# Portal parsers and login classification (api.py). See tests/mutation_triage.toml.
+source_paths = ["custom_components/mymedicalguardian/api.py"]
+pytest_add_cli_args_test_selection = [
+    # test_event.py is here for the event.py [[sentinel]] entries, which run this
+    # selection; mutmut itself only mutates api.py.
+    "tests/test_event.py",
+    "tests/test_api_hardening.py",
+    "tests/test_api_parsers.py",
+    "tests/test_api_fetch.py",
+]
+pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
+also_copy = ["custom_components", "tests"]
