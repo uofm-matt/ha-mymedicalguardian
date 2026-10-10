@@ -21,7 +21,7 @@ import httpx
 _LOGGER = logging.getLogger(__name__)
 
 BASE = "https://www.mymedicalguardian.com"
-UA = "ha-mymedicalguardian/1.0.2"
+UA = "ha-mymedicalguardian/1.0.3"
 
 _CSRF_RE = re.compile(r'name="ci_csrf_token"[^>]*value="([^"]*)"')
 _CARD_RE = re.compile(

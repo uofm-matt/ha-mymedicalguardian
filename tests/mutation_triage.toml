@@ -42,6 +42,12 @@ find = "mark = min(alert.observed_at, utcnow())"
 replace = "mark = alert.observed_at"
 why = "A skewed future stamp persists as the restart baseline and swallows real alerts after a restart. Killed by test_persisted_mark_never_exceeds_now."
 
+[[sentinel]]
+file = "custom_components/mymedicalguardian/event.py"
+find = "lookback if floor is None else max(lookback, min(floor, mark))"
+replace = "lookback"
+why = "The restart looks back past the floor, so an alert an earlier session or version already handled, or a pre-install one, replays as a new Fall. Killed by test_first_restart_does_not_fire_preinstall_fall and test_second_restart_after_upgrade_does_not_replay_fired_fall."
+
 # --- accepted survivors: every one is an equivalent mutant (reason on each) ---
 
 [[survivor]]

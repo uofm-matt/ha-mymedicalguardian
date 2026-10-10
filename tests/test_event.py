@@ -8,11 +8,17 @@ never re-fires one, and survives restart and a v1.0.0 -> 1.0.1 upgrade without
 phantom events.
 """
 
+import asyncio
+import random
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+import yaml
 from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
 from homeassistant.core import State
+from homeassistant.setup import async_setup_component
 from homeassistant.util.dt import utcnow
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -21,7 +27,11 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.mymedicalguardian.api import Alert, Snapshot
 from custom_components.mymedicalguardian.const import DOMAIN
-from custom_components.mymedicalguardian.event import ALERT_TYPES, OTHER_ALERT
+from custom_components.mymedicalguardian.event import (
+    ALERT_TYPES,
+    OTHER_ALERT,
+    MGAlertEvent,
+)
 
 FETCH = "custom_components.mymedicalguardian.coordinator.fetch_snapshot"
 
@@ -588,6 +598,7 @@ async def test_late_fall_after_restart_fires_and_fired_alerts_do_not_replay(hass
         hass,
         observed_at=beat.observed_at.isoformat(),
         fired_through=beat.observed_at.isoformat(),
+        fired_floor=t.isoformat(),
         fired=[["Heart Beat", beat.observed_at.isoformat()]],
     )
     entry = _entry(hass)
@@ -653,7 +664,7 @@ async def test_duplicate_critical_rows_fire_once(hass):
     assert seen.count("Fall") == 1
 
 
-async def test_malformed_fired_list_entries_are_ignored(hass):
+async def test_malformed_fired_list_entries_are_ignored(hass, fires):
     t = datetime(2026, 5, 12, 14, 0, 0, tzinfo=UTC)
     beat = _alert(t, "Heart Beat")
     _restored(
@@ -667,4 +678,321 @@ async def test_malformed_fired_list_entries_are_ignored(hass):
 
     # Nothing usable was restored, so the in-window beat is simply unfired: it
     # fires once rather than the malformed entries raising or being trusted.
-    assert hass.states.get("event.mom_alert").attributes["alert_type"] == "Heart Beat"
+    assert fires == ["Heart Beat"]
+
+
+async def _reload(hass, entry, snapshots):
+    """Restart the entity the way HA does: unload stores its state and restore
+    payload, reload restores from them. Then run one refresh per extra snapshot."""
+    with patch(FETCH, AsyncMock(side_effect=snapshots)):
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        for _ in snapshots[1:]:
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+
+
+@pytest.fixture
+def fires():
+    """The alert_type of every event the entity triggers, in order. Spies on
+    _trigger_event because a fire during setup or reload is folded into the
+    entity's first state write and never shows as its own state change."""
+    seen: list[str] = []
+    original = MGAlertEvent._trigger_event
+
+    def spy(self, event_type, event_attributes=None):
+        seen.append(event_attributes["alert_type"])
+        return original(self, event_type, event_attributes)
+
+    with patch.object(MGAlertEvent, "_trigger_event", spy):
+        yield seen
+
+
+async def _poll(hass, entry, snapshot):
+    with patch(FETCH, AsyncMock(return_value=snapshot)):
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+
+async def test_first_restart_does_not_fire_preinstall_fall(hass, freezer, fires):
+    # A Fall from before the install sits in the portal window and must never
+    # fire: not at setup, and not after the first restart looks back 3 hours.
+    start = utcnow()
+    old_fall = _alert(start - timedelta(hours=2), "Fall")
+    beat = _alert(start + timedelta(minutes=5), "Heart Beat")
+    entry = _entry(hass)
+    await _setup(hass, entry, [_snap(old_fall)])
+    freezer.move_to(start + timedelta(minutes=10))
+    await _poll(hass, entry, _snap(beat, old_fall))
+    assert fires == ["Heart Beat"]
+
+    freezer.move_to(start + timedelta(minutes=20))
+    await _reload(hass, entry, [_snap(beat, old_fall), _snap(beat, old_fall)])
+
+    assert fires == ["Heart Beat"]
+
+
+async def test_second_restart_after_upgrade_does_not_replay_fired_fall(
+    hass, freezer, fires
+):
+    # A Fall fired under 1.0.1 (second-resolution mark, no fired list). After the
+    # upgrade restart one Heart Beat fires, then HA restarts again.
+    start = utcnow()
+    fall = _alert(start - timedelta(hours=1), "Fall")
+    beat = _alert(start + timedelta(minutes=5), "Heart Beat")
+    stamp = fall.observed_at.isoformat()
+    restored = State("event.mom_alert", stamp, {"event_type": "Fall"})
+    extra = {
+        "last_event_type": "Fall",
+        "last_event_attributes": {"observed_at": stamp, "alert_type": "Fall"},
+    }
+    mock_restore_cache_with_extra_data(hass, [(restored, extra)])
+    entry = _entry(hass)
+    await _setup(hass, entry, [_snap(fall)])
+    freezer.move_to(start + timedelta(minutes=10))
+    await _poll(hass, entry, _snap(beat, fall))
+    assert fires == ["Heart Beat"]
+
+    freezer.move_to(start + timedelta(minutes=20))
+    await _reload(hass, entry, [_snap(beat, fall), _snap(beat, fall)])
+
+    assert fires == ["Heart Beat"]
+
+
+async def test_late_fall_still_fires_after_a_real_restart(hass, freezer, fires):
+    # Round trip through HA's own restore store: Heart Beat fires, HA restarts,
+    # then the portal posts a Fall stamped before the Heart Beat.
+    start = utcnow()
+    fall = _alert(start + timedelta(minutes=2), "Fall")
+    beat = _alert(start + timedelta(minutes=5), "Heart Beat")
+    entry = _entry(hass)
+    await _setup(hass, entry, [Snapshot()])
+    freezer.move_to(start + timedelta(minutes=10))
+    await _poll(hass, entry, _snap(beat))
+
+    freezer.move_to(start + timedelta(minutes=20))
+    await _reload(hass, entry, [_snap(beat), _snap(beat, fall)])
+
+    assert fires == ["Heart Beat", "Fall"]
+    # The stored mark is the newest stamp fired, not the last event's: the late
+    # Fall must not pull it back behind the Heart Beat.
+    attrs = hass.states.get("event.mom_alert").attributes
+    assert datetime.fromisoformat(attrs["fired_through"]) == beat.observed_at
+
+
+async def test_late_fall_fires_after_restart_behind_many_newer_alerts(
+    hass, freezer, fires
+):
+    # Twenty alerts inside the lookback window, then a restart, then a Fall
+    # stamped before all of them. The stored list covers the whole window, so
+    # none of the twenty repeats and the late Fall is not taken as handled.
+    start = utcnow()
+    soses = [_alert(start + timedelta(minutes=m), "SOS") for m in range(1, 21)]
+    fall = _alert(start + timedelta(seconds=30), "Fall")
+    entry = _entry(hass)
+    await _setup(hass, entry, [Snapshot()])
+    freezer.move_to(start + timedelta(minutes=30))
+    await _poll(hass, entry, _snap(*soses))
+    assert fires == ["SOS"] * 20
+
+    freezer.move_to(start + timedelta(minutes=40))
+    await _reload(hass, entry, [_snap(*soses), _snap(*soses, fall)])
+
+    assert fires == ["SOS"] * 20 + ["Fall"]
+
+
+async def test_alerts_past_the_storage_bound_repeat_rather_than_hide_a_fall(
+    hass, freezer, fires
+):
+    # More alerts in the window than the stored list may hold. The ones that
+    # did not fit fire again after a restart; the alternative, raising the
+    # baseline past them, would also hide a Fall posted late from before them.
+    start = utcnow()
+    falls = [_alert(start + timedelta(minutes=m), "Fall") for m in (1, 2, 3, 4)]
+    entry = _entry(hass)
+    with patch("custom_components.mymedicalguardian.event._PERSIST_FIRED", 2):
+        await _setup(hass, entry, [Snapshot()])
+        freezer.move_to(start + timedelta(minutes=10))
+        await _poll(hass, entry, _snap(*reversed(falls)))
+        assert fires == ["Fall"] * 4
+
+        freezer.move_to(start + timedelta(minutes=20))
+        await _reload(hass, entry, [_snap(*reversed(falls))] * 2)
+
+    assert fires == ["Fall"] * 6
+
+
+async def test_stored_list_holds_only_the_lookback_window(hass, freezer):
+    # A key older than the lookback can never matter after a restart, so it is
+    # not carried in the event attributes.
+    start = utcnow()
+    early = _alert(start + timedelta(minutes=1), "Heart Beat")
+    late = _alert(start + timedelta(hours=4), "Heart Beat")
+    entry = _entry(hass)
+    await _setup(hass, entry, [Snapshot()])
+    freezer.move_to(start + timedelta(minutes=10))
+    await _poll(hass, entry, _snap(early))
+    freezer.move_to(start + timedelta(hours=4, minutes=10))
+    await _poll(hass, entry, _snap(late, early))
+
+    attrs = hass.states.get("event.mom_alert").attributes
+    assert attrs["fired"] == [["Heart Beat", late.observed_at.isoformat()]]
+
+
+def _restored_from_1_0_2(hass, beat):
+    stamp = beat.observed_at.isoformat()
+    _restored(
+        hass, observed_at=stamp, fired_through=stamp, fired=[["Heart Beat", stamp]]
+    )
+
+
+async def test_late_fall_fires_after_restart_from_1_0_2_state(hass, fires):
+    # 1.0.2 stored the fired list without a floor. A late Fall and an already
+    # handled one look the same from that state, and a missed Fall costs more
+    # than a repeated one, so that one restart keeps the full 3 hour lookback.
+    t = datetime(2026, 5, 12, 14, 0, 0, tzinfo=UTC)
+    beat = _alert(t + timedelta(minutes=10), "Heart Beat")
+    fall = _alert(t + timedelta(minutes=5), "Fall")
+    _restored_from_1_0_2(hass, beat)
+    entry = _entry(hass)
+    await _setup(hass, entry, [_snap(beat), _snap(beat, fall)])
+
+    assert fires == ["Fall"]
+
+
+async def test_state_stored_by_1_0_2_can_repeat_an_alert_once_and_never_again(
+    hass, fires
+):
+    # The cost of that choice: an alert from behind 1.0.2's baseline can fire
+    # once more on the restart that reads its state. The floor stored from then
+    # on stops any further replay.
+    t = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
+    beat = _alert(t, "Heart Beat")
+    old_fall = _alert(t - timedelta(hours=1), "Fall")
+    _restored_from_1_0_2(hass, beat)
+    entry = _entry(hass)
+    await _setup(hass, entry, [_snap(beat, old_fall)])
+    assert fires == ["Fall"]
+
+    await _reload(hass, entry, [_snap(beat, old_fall), _snap(beat, old_fall)])
+
+    assert fires == ["Fall"]
+
+
+async def test_non_string_restore_values_are_ignored(hass, fires):
+    t = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
+    _restored(
+        hass, observed_at=t.isoformat(), fired_through=5, fired_floor=["x"], fired=[]
+    )
+    entry = _entry(hass)
+    fall = _alert(t + timedelta(minutes=1), "Fall")
+    await _setup(hass, entry, [_snap(fall)])
+
+    assert hass.states.get("event.mom_alert") is not None
+    assert fires == ["Fall"]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"fired_floor": "2026-05-12T11:00:00", "fired": []},
+        {"fired": [["Heart Beat", "2026-05-12T11:00:00"]]},
+        {"fired_through": "2026-05-12T12:00:00", "fired": []},
+    ],
+    ids=["naive-floor", "naive-fired-entry", "naive-mark"],
+)
+async def test_naive_restore_stamps_are_read_as_utc(hass, fires, stored):
+    # Every released version stored offset-aware stamps; a hand-edited or
+    # corrupt store must not stop the entity from loading.
+    t = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
+    _restored(
+        hass, **{"observed_at": t.isoformat(), "fired_through": t.isoformat()} | stored
+    )
+    entry = _entry(hass)
+    await _setup(hass, entry, [_snap(_alert(t + timedelta(minutes=1), "Fall"))])
+
+    assert hass.states.get("event.mom_alert") is not None
+    assert fires == ["Fall"]
+
+
+async def test_readme_automation_delivers_both_criticals_of_one_poll(hass):
+    # Runs the README's own example automation against a notify that takes a
+    # moment. Without `mode: queued` Home Assistant skips the second run
+    # ("Already running") and one of two emergencies never notifies.
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    section = readme.split("### Notify on Fall / SOS", 1)[1]
+    automation = yaml.safe_load(section.split("```yaml", 1)[1].split("```", 1)[0])
+    titles: list[str] = []
+
+    async def slow_notify(call):
+        await asyncio.sleep(0.05)
+        titles.append(call.data["title"])
+
+    hass.services.async_register("notify", "family_group", slow_notify)
+    assert await async_setup_component(hass, "automation", {"automation": automation})
+    base = utcnow() + timedelta(minutes=5)
+    fall = _alert(base.replace(second=30), "Fall")
+    sos = _alert(base.replace(second=50), "SOS")
+    entry = _entry(hass)
+    await _setup(hass, entry, [Snapshot(), _snap(sos, fall)])
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+
+    assert [title.split()[1] for title in titles] == ["Fall", "SOS"]
+
+
+@pytest.fixture
+def fired_keys():
+    """Like `fires`, but the (alert_type, observed_at) key of each triggered event."""
+    seen: list[tuple[str, str]] = []
+    original = MGAlertEvent._trigger_event
+
+    def spy(self, event_type, event_attributes=None):
+        seen.append((event_attributes["alert_type"], event_attributes["observed_at"]))
+        return original(self, event_type, event_attributes)
+
+    with patch.object(MGAlertEvent, "_trigger_event", spy):
+        yield seen
+
+
+@pytest.mark.parametrize("seed", range(60))
+async def test_no_alert_fires_twice_and_no_seen_critical_is_missed(
+    hass, freezer, fired_keys, seed
+):
+    # Property over random portal windows and restarts. Whatever order alerts
+    # surface in and wherever HA restarts: nothing fires twice, nothing from
+    # before monitoring began fires, and every Fall/SOS stamped after it began
+    # that the portal ever showed fires exactly once.
+    rng = random.Random(seed)
+    start = utcnow()
+    minutes = rng.sample([-120, -30, 1, 2, 3, 4, 5, 6, 7, 8, 9], k=rng.randint(3, 8))
+    pool = [
+        _alert(
+            start + timedelta(minutes=m),
+            rng.choice(["Fall", "SOS", "Heart Beat", "On Cradle"]),
+        )
+        for m in minutes
+    ]
+    entry = _entry(hass)
+    await _setup(hass, entry, [Snapshot()])
+    origin, shown = start, set()
+    for step in range(rng.randint(2, 6)):
+        freezer.move_to(start + timedelta(minutes=10 + step))
+        window = _snap(*rng.sample(pool, k=rng.randint(0, len(pool))))
+        if rng.random() < 0.4:
+            if not fired_keys:
+                # Nothing has fired, so nothing was stored: monitoring begins
+                # again at this restart, as it does on a fresh install.
+                origin = utcnow()
+            await _reload(hass, entry, [window])
+        else:
+            await _poll(hass, entry, window)
+        shown |= {(a.type, a.observed_at) for a in window.alerts}
+
+    fired = [(t, datetime.fromisoformat(when)) for t, when in fired_keys]
+    assert len(fired) == len(set(fired)), f"fired twice: {fired}"
+    assert all(when > origin for _, when in fired), (
+        f"fired from before monitoring: {fired}"
+    )
+    owed = {k for k in shown if k[0] in ("Fall", "SOS") and k[1] > origin}
+    assert owed <= set(fired), f"critical shown but never fired: {owed - set(fired)}"

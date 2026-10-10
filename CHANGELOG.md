@@ -2,8 +2,23 @@
 
 Newest first, one entry per change: what changed, then why.
 
-## 2026-10-10 (after 1.0.2)
+## 1.0.3 — 2026-10-10
 
+Upgrade notes:
+
+- If you copied the example emergency automation from the README, add `mode: queued` to it. Without it, two emergencies seen in one poll send one notification.
+- The first restart after upgrading from 1.0.2 can repeat one alert that was already handled. Later restarts cannot.
+
+Changes:
+
+- Fix: a restart could re-fire a Fall or SOS the integration had already handled. After a restart 1.0.2 looked back 3 hours and fired anything not in its stored fired list, but that list says nothing about alerts from before the previous session's baseline (fired under 1.0.1, or older than the install). It bit when Home Assistant restarted within about 3 hours of an install or of the upgrade. The entity now stores a floor (`fired_floor`, the time from which the list is complete) and never looks back past it. A state stored by 1.0.2 has no floor, and from it a late Fall and an already handled one look the same; a missed Fall costs more than a repeated one, so the one restart that reads 1.0.2's state keeps the full lookback and can repeat an alert once. Every later restart is covered by the floor. Found while reading the code for the architecture plan, reproduced with failing tests first.
+- The stored list now holds every fired alert inside the 3 hour lookback (up to 64) and nothing older, since a restart never looks further back. In normal use that is a handful of entries, fewer than the fixed 16 that 1.0.2 stored.
+- README: the example emergency automation now sets `mode: queued`. Since 1.0.2 two emergencies in one poll fire in the same instant, and Home Assistant's default `single` mode skips the second run while the first notification is still sending (measured: one of two delivered). If you copied the example, add `mode: queued`.
+- Restore values that are not strings (a hand-edited or corrupt restore file) are ignored, and a stamp without a UTC offset is read as UTC, instead of raising and leaving the entity unloaded.
+- Known limits, unchanged by this fix: if Home Assistant restarts before the entity has ever fired an event, nothing is stored and monitoring begins again at that restart, so a Fall stamped before it and posted after it is not fired. If more than 64 alerts fire within 3 hours and Home Assistant then restarts, the oldest ones, which did not fit in the stored list, fire again after each restart while they stay inside that window; the list is not trusted past what it holds, because that would hide a Fall posted late from before them.
+- Version 1.0.3 in the manifest, user agent, pyproject and the bug-report placeholder — the replay fix ships on its own so nobody waits on the architecture work for it.
+- Dependabot ignores pytest, pytest-asyncio and pytest-cov, and holds pytest-homeassistant-custom-component at 0.13.205 — that package pins the other three exactly, and its later releases need Python 3.13, so every one of those PRs fails to resolve. CI's latest job still tests the newest stack.
+- A sixth mutation sentinel pins the restore floor (`max(lookback, min(floor, mark))`) in `event.py`, and mutmut copies `README.md` into its working tree because a test now reads the example automation from it.
 - `.gitignore` ignores `.carburize-review-token` — the repo is public and the per-repo review token must never be committed.
 - Mutation gate for `api.py` (`tests/mutation_triage.toml`, `[tool.mutmut]`): 438 of 466 mutants killed, the other 28 triaged as equivalent, plus 5 hand-written sentinels over `api.py` and `event.py`. `event.py` cannot be mutated by mutmut because every mutant segfaults under its fork with the Home Assistant fixtures, so its load-bearing lines are pinned by sentinels.
 - The gate found `_CRITICAL_ALERTS` had become vestigial after the whole-word rewrite (the regex hard-coded `fall|sos`); the regex is now built from the set, so the set is the single source.

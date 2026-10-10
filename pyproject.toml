@@ -1,6 +1,6 @@
 [project]
 name = "mmg"
-version = "1.0.2"
+version = "1.0.3"
 requires-python = "==3.12.*"
 dependencies = []
 
@@ -80,4 +80,5 @@ pytest_add_cli_args_test_selection = [
     "tests/test_api_fetch.py",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
-also_copy = ["custom_components", "tests"]
+# README.md: tests/test_event.py runs the README's example automation.
+also_copy = ["custom_components", "tests", "README.md"]

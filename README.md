@@ -112,6 +112,9 @@ Drop these in your `automations.yaml` (adjust entity IDs to match your install).
 
 ```yaml
 - alias: "Mom: emergency alert"
+  # Two emergencies can arrive in the same poll. The default mode (single) drops
+  # the second while the first notification is still sending; queued keeps both.
+  mode: queued
   trigger:
     - platform: state
       entity_id: event.mom_alert

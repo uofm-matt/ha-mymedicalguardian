@@ -41,25 +41,30 @@ EVENT_TYPES = [*ALERT_TYPES, OTHER_ALERT]
 
 # Bound on remembered fired alerts; far above the portal's recent-alerts window.
 _FIRED_CAP = 256
-# How many fired alerts ride along in the event attributes so a restart can tell
-# fired from unfired, and how far before the restored mark it still looks.
-_PERSIST_FIRED = 16
+# How far before the restored mark a restart still looks (never past the persisted
+# floor, the time from which the stored set is complete), and a size bound on the
+# fired alerts inside that window that ride along in the event attributes. A
+# handful in normal use; the bound only matters in an alert storm.
+_PERSIST_FIRED = 64
 _RESTART_LOOKBACK = timedelta(hours=3)
 
 
-def _parse_iso(value: str | None) -> datetime | None:
-    if not value:
+def _parse_iso(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    # Every release stored offset-aware stamps; a naive one (hand-edited store)
+    # would raise on the first comparison, so read it as UTC.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _fired_key(item: object) -> tuple[str, datetime] | None:
     if not (isinstance(item, list) and len(item) == 2 and isinstance(item[0], str)):
         return None
-    when = _parse_iso(item[1]) if isinstance(item[1], str) else None
+    when = _parse_iso(item[1])
     return (item[0], when) if when else None
 
 
@@ -106,9 +111,20 @@ class MGAlertEvent(MGEntity, EventEntity):
             if mark is not None and isinstance(persisted, list):
                 # The fired set survived the restart, so look back past the mark:
                 # a Fall posted late with a stamp older than the last routine
-                # event is unfired and must still go out.
+                # event is unfired and must still go out. Never look back past
+                # the floor, though: the set says nothing about alerts older than
+                # it (handled by an earlier session or version, or pre-install),
+                # and firing those would replay them.
                 self._fired = {k for i in persisted if (k := _fired_key(i))}
-                self._fired_through = mark - _RESTART_LOOKBACK
+                floor = _parse_iso(attrs.get("fired_floor"))
+                lookback = mark - _RESTART_LOOKBACK
+                # 1.0.2 stored the set without a floor. From that state a late
+                # Fall and an already handled one look the same, and a missed
+                # Fall costs more than a repeated one, so that one restart keeps
+                # the full lookback. The floor stored from here on ends it.
+                self._fired_through = (
+                    lookback if floor is None else max(lookback, min(floor, mark))
+                )
             # v1.0.0 persisted minute-resolution marks and never set the
             # 'alert_type' attribute (added in v1.0.1), so its absence is a
             # reliable legacy signal — unlike the wall-clock seconds, which the
@@ -189,6 +205,16 @@ class MGAlertEvent(MGEntity, EventEntity):
         event_type = critical_type(alert.type) or (
             alert.type if alert.type in ALERT_TYPES else OTHER_ALERT
         )
+        # A restart never looks back further than the lookback, so only keys
+        # inside it are worth storing, and storing all of them keeps the set
+        # complete from this session's baseline. Past the size bound the oldest
+        # are left out and can fire again after a restart; raising the floor
+        # past them instead would hide a Fall posted late from before them.
+        horizon = self._latest_fired - _RESTART_LOOKBACK
+        kept = sorted((k for k in self._fired if k[1] > horizon), key=lambda k: k[1])[
+            -_PERSIST_FIRED:
+        ]
+        floor = min(self._fired_through or self._added_at, self._latest_fired)
         # Nest coords under `location` so HA's map doesn't sniff lat/lon and render
         # this event entity as an extra pin (the device_tracker is canonical).
         self._trigger_event(
@@ -202,11 +228,7 @@ class MGAlertEvent(MGEntity, EventEntity):
                 },
                 "observed_at": alert.observed_at.astimezone(UTC).isoformat(),
                 "fired_through": self._latest_fired.astimezone(UTC).isoformat(),
-                "fired": [
-                    [t, when.astimezone(UTC).isoformat()]
-                    for t, when in sorted(self._fired, key=lambda k: k[1])[
-                        -_PERSIST_FIRED:
-                    ]
-                ],
+                "fired_floor": floor.astimezone(UTC).isoformat(),
+                "fired": [[t, when.astimezone(UTC).isoformat()] for t, when in kept],
             },
         )

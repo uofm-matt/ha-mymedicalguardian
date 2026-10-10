@@ -10,5 +10,5 @@
   "loggers": ["custom_components.mymedicalguardian"],
   "quality_scale": "platinum",
   "requirements": [],
-  "version": "1.0.2"
+  "version": "1.0.3"
 }
