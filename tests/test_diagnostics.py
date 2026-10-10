@@ -1,14 +1,22 @@
 """Diagnostics dump tests — payload shape + redaction."""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.mymedicalguardian.api import Snapshot
+from custom_components.mymedicalguardian.api import Alert, Location, Snapshot
 from custom_components.mymedicalguardian.const import DOMAIN
 from custom_components.mymedicalguardian.diagnostics import (
     async_get_config_entry_diagnostics,
+)
+
+_NOW = datetime(2026, 5, 12, 14, 0, tzinfo=UTC)
+_SNAPSHOT = Snapshot(
+    device_model="MGMini-Pearl VZ",
+    locations=[Location("GPS", "1 Oak St", 42.5, -84.5, _NOW, "raw")],
+    alerts=(Alert("Fall", _NOW, "1 Oak St", 42.5, -84.5),),
 )
 
 
@@ -27,7 +35,7 @@ async def test_diagnostics_redacts_credentials_and_coords(hass):
 
     with patch(
         "custom_components.mymedicalguardian.coordinator.fetch_snapshot",
-        AsyncMock(return_value=Snapshot(device_model="MGMini-Pearl VZ")),
+        AsyncMock(return_value=_SNAPSHOT),
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -41,5 +49,7 @@ async def test_diagnostics_redacts_credentials_and_coords(hass):
     assert diag["entry"]["data"][CONF_PASSWORD] == "**REDACTED**"
     assert diag["entry"]["data"][CONF_NAME] == "**REDACTED**"
     assert diag["snapshot"]["device_model"] == "MGMini-Pearl VZ"
-    assert diag["snapshot"]["latest_location"] is None
-    assert diag["snapshot"]["latest_alert"] is None
+    for key in ("latest_location", "latest_alert"):
+        for field in ("address", "latitude", "longitude"):
+            assert diag["snapshot"][key][field] == "**REDACTED**"
+    assert diag["snapshot"]["latest_alert"]["type"] == "Fall"

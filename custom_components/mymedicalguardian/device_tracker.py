@@ -7,12 +7,11 @@ from homeassistant.components.device_tracker import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import MGConfigEntry
 from .api import Location
 from .coordinator import MGCoordinator
-from .entity import device_info
+from .entity import MGEntity
 
 # Entity state updates flow through the coordinator's single update; entities
 # never poll on their own, so HA's parallel_updates limiter is unused.
@@ -27,16 +26,13 @@ async def async_setup_entry(
     async_add_entities([MGTracker(entry.runtime_data, entry)])
 
 
-class MGTracker(CoordinatorEntity[MGCoordinator], TrackerEntity):
-    _attr_has_entity_name = True
+class MGTracker(MGEntity, TrackerEntity):
     _attr_translation_key = "location"
     # BaseTrackerEntity declares _attr_device_info: None; we narrow it.
     _attr_device_info: DeviceInfo  # type: ignore[assignment]
 
     def __init__(self, coordinator: MGCoordinator, entry: MGConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_location"
-        self._attr_device_info = device_info(entry, coordinator)
+        super().__init__(coordinator, entry, "location")
 
     def _loc(self) -> Location | None:
         data = self.coordinator.data

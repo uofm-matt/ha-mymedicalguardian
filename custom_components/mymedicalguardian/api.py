@@ -35,7 +35,12 @@ _WHEN_RE = re.compile(
     r"\b([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) (\d{1,2}):(\d{2}) (AM|PM) ([A-Za-z]{2,4})\b"
 )
 _BATTERY_RE = re.compile(r"const\s+batteryInfo\s*=\s*(\{[^;]+?\})\s*;", re.DOTALL)
-_DEVICE_STATUS_RE = re.compile(r"\bdeviceStatus\s*=\s*(\[.*?\])\s*;", re.DOTALL)
+_DEVICE_STATUS_RE = re.compile(r"\bdeviceStatus\s*=\s*(?=\[)")
+# Cancel / clear / test / disabled labels name an emergency without being one.
+_NOT_CRITICAL_RE = re.compile(
+    r"cancel|clear|dismiss|resolv|false|test|disabl", re.IGNORECASE
+)
+_CRITICAL_RE = re.compile(r"\b(fall|sos)\b", re.IGNORECASE)
 _STEPS_RE = re.compile(r"todaysSteps\s*=\s*JSON\.parse\(\s*'((?:\\.|[^'\\])*)'\s*\)")
 _SIGNAL_LABEL_RE = re.compile(r"SIGNAL</h4>\s*<p[^>]*>\s*([A-Za-z]+)\s*</p>", re.DOTALL)
 _SIGNAL_ICON_RE = re.compile(r"images/wifi-([a-z]+)\.svg")
@@ -61,6 +66,30 @@ _TZ_OFFSETS = {
 # Emergency event types that must never be masked by a newer routine entry
 # (heartbeat / cradle) sharing the same poll window.
 _CRITICAL_ALERTS = {"Fall", "SOS"}
+
+
+def critical_type(alert_type: object) -> str | None:
+    """Return the canonical critical type ("Fall" / "SOS") for a portal label.
+
+    Only "Heart Beat", "On Cradle" and "Off Cradle" have been seen in real data,
+    so the match is case-insensitive on whole words ("Fall Detected", "SOS
+    Pressed") rather than exact: a missed Fall costs far more than a routine event
+    misread as one. Labels that cancel or test an alert ("SOS Cancelled") and
+    non-string labels are never critical.
+    """
+    if not isinstance(alert_type, str) or _NOT_CRITICAL_RE.search(alert_type):
+        return None
+    if not (m := _CRITICAL_RE.search(alert_type)):
+        return None
+    return "SOS" if m.group(1).casefold() == "sos" else "Fall"
+
+
+def _unescape_js(raw: str) -> str:
+    """Decode the escapes of a JS string literal's body. latin-1 with
+    backslashreplace keeps a literal non-ASCII character intact; a bare utf-8
+    encode turns "Zoë" into mojibake."""
+    return raw.encode("latin-1", "backslashreplace").decode("unicode_escape")
+
 
 # Month lookup so timestamp parsing never depends on the host LC_TIME locale
 # (strptime's %b/%p reject 'May'/'AM' under a non-English locale, which would
@@ -174,32 +203,35 @@ def _finite_float(val: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def _alert_age_key(ev: dict[str, Any]) -> datetime:
-    """Sort key for deviceStatus entries: prefer full-second time_utc, fall back
-    to the local time_user_tz, and sort genuinely timeless entries oldest."""
+def _alert_time(ev: dict[str, Any]) -> datetime | None:
+    """When a deviceStatus entry happened: the full-second ``time_utc`` if
+    present, else the local ``time_user_tz``, else None."""
     if (utc := _parse_utc(ev.get("time_utc"))) is not None:
         return utc
-    if local := ev.get("time_user_tz"):
+    if isinstance(raw := ev.get("time_user_tz"), str) and raw:
         try:
-            return _parse_when(local)
+            return _parse_when(raw)
         except FetchError:
-            pass
-    return datetime.min.replace(tzinfo=UTC)
+            return None
+    return None
+
+
+def _alert_type(ev: dict[str, Any]) -> str:
+    return t if isinstance(t := ev.get("type"), str) else "Unknown"
+
+
+def _alert_age_key(ev: dict[str, Any]) -> datetime:
+    """Sort key for deviceStatus entries; genuinely timeless entries sort oldest."""
+    return _alert_time(ev) or datetime.min.replace(tzinfo=UTC)
 
 
 def _build_alert(ev: dict[str, Any]) -> Alert | None:
     """Build an Alert from a deviceStatus entry, or None if it has no usable
     timestamp. A non-numeric coordinate nulls only that field."""
-    observed_at = _parse_utc(ev.get("time_utc"))
-    if observed_at is None and (raw := ev.get("time_user_tz")):
-        try:
-            observed_at = _parse_when(raw)
-        except FetchError:
-            return None
-    if observed_at is None:
+    if (observed_at := _alert_time(ev)) is None:
         return None
     return Alert(
-        type=ev.get("type", "Unknown"),
+        type=_alert_type(ev),
         observed_at=observed_at,
         address=ev.get("address"),
         latitude=_finite_float(ev.get("latitude")),
@@ -209,7 +241,11 @@ def _build_alert(ev: dict[str, Any]) -> Alert | None:
 
 def _parse_locations(html: str) -> list[Location]:
     out: list[Location] = []
-    for event, address, lat, lon, when in _CARD_RE.findall(html):
+    # Match each <strong>-led chunk on its own so a card missing a field cannot
+    # borrow the next card's address, coordinates and time.
+    chunks = re.split(r"(?=<strong>)", html)
+    matches = (m.groups() for chunk in chunks if (m := _CARD_RE.match(chunk)))
+    for event, address, lat, lon, when in matches:
         try:
             out.append(
                 Location(
@@ -260,12 +296,20 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
         except (ValueError, TypeError, FetchError) as err:
             _LOGGER.debug("batteryInfo unparseable: %s", err)
 
-    if m := _DEVICE_STATUS_RE.search(ds):
+    # A non-empty dashboard fragment without a parseable deviceStatus block is
+    # portal markup drift. Raise so the coordinator counts it toward the
+    # portal-unreachable repair instead of reporting a healthy, alert-less poll
+    # while Fall/SOS detection is silently off. An empty fragment stays legal.
+    m = _DEVICE_STATUS_RE.search(ds)
+    if m is None and ds.strip():
+        raise FetchError("dashboard has no deviceStatus block (markup changed?)")
+    if m:
         try:
-            parsed = json.loads(m.group(1))
+            # raw_decode stops at the end of the array, so a "];" inside a
+            # string value cannot truncate it the way a regex bound would.
+            parsed, _ = json.JSONDecoder().raw_decode(ds, m.end())
         except ValueError as err:
-            _LOGGER.debug("deviceStatus unparseable: %s", err)
-            parsed = []
+            raise FetchError(f"deviceStatus is not valid JSON: {err}") from err
         # Keep only object entries: a stray null/scalar element in an otherwise
         # valid array must not crash the sort or the cradle scan below.
         alerts = [ev for ev in parsed if isinstance(ev, dict)]
@@ -273,7 +317,7 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
         # reflects the most recent cradle transition and latest_alert is newest.
         alerts.sort(key=_alert_age_key, reverse=True)
         for ev in alerts:
-            t = ev.get("type", "")
+            t = _alert_type(ev)
             if t in {"On Cradle", "Off Cradle"}:
                 fields["charging"] = t == "On Cradle"
                 break
@@ -292,7 +336,7 @@ def _parse_dashboard(payload: Any, device_model: str | None) -> dict[str, Any]:
 
     if m := _STEPS_RE.search(steps_html):
         try:
-            steps = json.loads(m.group(1).encode().decode("unicode_escape"))
+            steps = json.loads(_unescape_js(m.group(1)))
         except (ValueError, TypeError) as err:
             _LOGGER.debug("todaysSteps unparseable: %s", err)
             steps = None
@@ -340,14 +384,23 @@ async def fetch_snapshot(
     # of forcing the user into a reauth flow.
     if rp.status_code == 429 or rp.status_code >= 500:
         raise FetchError(f"login endpoint returned status {rp.status_code}")
+    if rp.status_code == 401:
+        raise AuthError("login rejected — check email/password")
     try:
         login = rp.json()
     except json.JSONDecodeError as err:
         # A 200 carrying an HTML maintenance page is a transient portal issue,
         # not a credential rejection — don't force the user into a reauth flow.
         raise FetchError("login XHR returned non-JSON") from err
-    if rp.status_code != 200 or not isinstance(login, dict) or login.get("error", True):
+    # Only a 401, or a 200 whose body says error, is a credential rejection. Any
+    # other status (400, 403, 404) is the portal misbehaving, so retry rather than
+    # stop polling and demand a reauth.
+    if rp.status_code == 200 and (
+        not isinstance(login, dict) or login.get("error", True)
+    ):
         raise AuthError("login rejected — check email/password")
+    if rp.status_code != 200:
+        raise FetchError(f"login endpoint returned status {rp.status_code}")
 
     accounts = await client.get(BASE + "/account-lists", headers=headers)
     model_match = _MODEL_RE.search(accounts.text)

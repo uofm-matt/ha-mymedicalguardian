@@ -10,11 +10,10 @@ from homeassistant.components.sensor import (
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import MGConfigEntry
 from .coordinator import MGCoordinator
-from .entity import device_info
+from .entity import MGEntity
 
 PARALLEL_UPDATES = 0
 
@@ -36,15 +35,8 @@ async def async_setup_entry(
     )
 
 
-class _Base(CoordinatorEntity[MGCoordinator], SensorEntity):
-    _attr_has_entity_name = True
-
-    def __init__(
-        self, coordinator: MGCoordinator, entry: MGConfigEntry, suffix: str
-    ) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{suffix}"
-        self._attr_device_info = device_info(entry, coordinator)
+class _Base(MGEntity, SensorEntity):
+    pass
 
 
 class MGEventSensor(_Base):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
@@ -26,3 +27,16 @@ def device_info(entry: MGConfigEntry, coordinator: MGCoordinator) -> DeviceInfo:
     if model:
         info["model"] = model
     return info
+
+
+class MGEntity(CoordinatorEntity["MGCoordinator"]):
+    """Common base: unique id `<entry_id>_<suffix>`, shared device, entity names."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, coordinator: MGCoordinator, entry: MGConfigEntry, suffix: str
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{suffix}"
+        self._attr_device_info = device_info(entry, coordinator)
