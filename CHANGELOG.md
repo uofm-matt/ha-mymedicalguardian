@@ -2,11 +2,19 @@
 
 Newest first, one entry per change: what changed, then why.
 
-## 2026-10-10
+## 1.0.2 — 2026-10-10
+
+Upgrade notes:
+
+- If the portal ever returns a dashboard with no `deviceStatus` block, the integration now reports a failed update (and a Repair issue after 24 h) instead of silently showing no alerts. If you see "dashboard has no deviceStatus block" in the log, please open an issue with the diagnostics download.
+- The first restart after upgrading from 1.0.1 has no stored list of fired alerts, so a Fall the portal posts late with an older timestamp can still be missed on that one restart. Later restarts keep the list.
+- Fall/SOS detection now matches labels containing the whole word `fall` or `sos`. Labels that also contain cancel, clear, dismiss, resolve, false, test or disabled are treated as non-critical.
+
+Changes:
 
 - Drop `httpx>=0.27` from the manifest `requirements` — Hassfest rejects it because Home Assistant ships httpx itself, and the scheduled Validate run had been red since at least 2026-10-08.
 
-Fixes from the 2026-10-07 codereview audit (`~/projects/codereview/reports/mmg/2026-10-07-audit.md`), unreleased.
+Fixes from an internal code-review audit of 1.0.1.
 
 ### Fall / SOS safety
 
