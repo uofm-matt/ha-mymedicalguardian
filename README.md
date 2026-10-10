@@ -190,14 +190,14 @@ Drop these in your `automations.yaml` (adjust entity IDs to match your install).
 - **No on-demand refresh.** The "Ring my device" button on the portal isn't surfaced. Polling is read-only.
 - **Posting lag is bimodal.** As described in *How data is updated* — sometimes ~1 min, sometimes 30 min. The integration cannot make MG faster.
 - **No real-time push.** MG provides no push API, websocket, or webhook for caregivers; everything is poll-based.
-- **Markup-scrape.** When MG changes the caregiver portal markup, this integration may break. Parser-drift failures appear in the log at debug level, and after 24 h of consecutive fetch failures a Repair issue is raised.
-- **Alert-type labels verified against real data:** `Heart Beat`, `On Cradle`, `Off Cradle`. The parser passes any other string through verbatim, so `Fall`, `SOS`, `Manual Test`, `Power On` will fire correctly if MG returns those exact strings. If you actually trigger a Fall or SOS and the integration mis-labels it, please file an issue with the observed `event_type` attribute on the event entity.
+- **Markup-scrape.** When MG changes the caregiver portal markup, this integration may break. A dashboard whose alert block goes missing or unparseable counts as a failed fetch, and after 24 h of consecutive fetch failures a Repair issue is raised. Per-card location parse misses still appear only at debug level.
+- **Alert-type labels verified against real data:** `Heart Beat`, `On Cradle`, `Off Cradle`. Any label containing `fall` or `sos` (case-insensitive) fires at critical priority as `Fall` or `SOS`, with the raw label in the `alert_type` attribute; `Manual Test` and `Power On` are matched exactly and everything else fires as `Other`. If you actually trigger a Fall or SOS and the integration mis-labels it, please file an issue with the observed `event_type` attribute on the event entity.
 - **No battery alert from MG itself.** The portal sends a low-battery alert via email/SMS but doesn't expose it on the dashboard feed; do battery automations on `sensor.<title>_battery` directly.
 
 ## Troubleshooting & filing issues
 
 1. **First check the integration log** at Settings → System → Logs (filter `mymedicalguardian`). Debug-level lines show parser hits/misses.
-2. **Download diagnostics** from Settings → Devices & Services → MyMedicalGuardian Tracker → **⋮ → Download diagnostics**. Email, the device name, and address are redacted automatically — safe to attach to public issues.
+2. **Download diagnostics** from Settings → Devices & Services → MyMedicalGuardian Tracker → **⋮ → Download diagnostics**. Email, the device name, address and coordinates are redacted automatically, but battery, steps and timestamps are not; see [Privacy](#privacy) before attaching it to a public issue.
 3. **Repair UI** — if the portal is unreachable for >24 hours, a repair issue appears in Settings → Repairs with the last error. This is also the canonical sign that something needs your attention.
 4. **Open an issue** at [github.com/uofm-matt/ha-mymedicalguardian/issues](https://github.com/uofm-matt/ha-mymedicalguardian/issues) with the diagnostics download, your HA version, and the symptoms.
 

@@ -13,7 +13,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_EMAIL, CONF_NAME, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.util.ssl import client_context
 
 from .api import AuthError, FetchError, fetch_snapshot
@@ -36,7 +36,7 @@ USER_SCHEMA = vol.Schema(
 REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
 
 
-async def _validate(hass: HomeAssistant, email: str, password: str) -> str | None:
+async def _validate(email: str, password: str) -> str | None:
     """Return None on success, or an error key for the form."""
     async with httpx.AsyncClient(
         verify=client_context(), follow_redirects=True, timeout=30.0
@@ -66,7 +66,7 @@ class MGConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
             self._abort_if_unique_id_configured()
             if err := await _validate(
-                self.hass, user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
             ):
                 errors["base"] = err
             else:
@@ -92,7 +92,7 @@ class MGConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         if user_input is not None:
             if err := await _validate(
-                self.hass, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD]
+                entry.data[CONF_EMAIL], user_input[CONF_PASSWORD]
             ):
                 errors["base"] = err
             else:
@@ -115,7 +115,7 @@ class MGConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
             self._abort_if_unique_id_mismatch()
             if err := await _validate(
-                self.hass, user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
             ):
                 errors["base"] = err
             else:
@@ -139,7 +139,7 @@ class MGConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         return MGOptionsFlow()
 
 

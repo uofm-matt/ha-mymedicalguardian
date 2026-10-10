@@ -1,6 +1,6 @@
 [project]
 name = "mmg"
-version = "0.1.0"
+version = "1.0.1"
 requires-python = "==3.12.*"
 dependencies = []
 
@@ -19,7 +19,7 @@ package = false
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "--cov=custom_components.mymedicalguardian --cov-report=term-missing"
+addopts = "--cov=custom_components.mymedicalguardian --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
 source = ["custom_components/mymedicalguardian"]

@@ -261,3 +261,12 @@ class TestParseDashboard:
         assert [a.type for a in fields["alerts"]] == ["SOS", "Fall"]
         assert fields["alerts"][0].observed_at.second == 50
         assert fields["alerts"][1].observed_at.second == 5
+
+
+def test_alert_with_unparseable_local_time_and_no_utc_is_dropped():
+    from custom_components.mymedicalguardian.api import _alert_time, _build_alert
+
+    ev = {"type": "Fall", "time_user_tz": "not a time"}
+    assert _alert_time(ev) is None
+    assert _build_alert(ev) is None
+    assert _alert_time({"type": "Fall"}) is None
