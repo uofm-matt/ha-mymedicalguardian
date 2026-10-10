@@ -9,7 +9,7 @@ test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
-    "pytest-homeassistant-custom-component==0.13.195",
+    "pytest-homeassistant-custom-component==0.13.205",
 ]
 
 [tool.uv]
